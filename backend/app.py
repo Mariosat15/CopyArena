@@ -58,11 +58,25 @@ def get_session_id_from_request(request: Request) -> str:
 
 def get_or_create_session_user(session_id: str, db: Session) -> User:
     """Get or create a user for this session"""
+    # First check in-memory cache
     if session_id in user_sessions:
         user_id = user_sessions[session_id]
         user = db.query(User).filter(User.id == user_id).first()
         if user:
             return user
+    
+    # Check if user exists in database with this session pattern
+    # Look for existing user with session-based email pattern
+    existing_user = db.query(User).filter(
+        User.email.like(f"user_{session_id[:8]}_%@copyarena.com")
+    ).first()
+    
+    if existing_user:
+        # Found existing user, cache the session
+        user_sessions[session_id] = existing_user.id
+        user_api_keys[existing_user.api_key] = existing_user.id
+        logger.info(f"Retrieved existing user {existing_user.id} for session {session_id[:8]}")
+        return existing_user
     
     # Create a new user for this session with timestamp to ensure uniqueness
     import time
@@ -330,8 +344,9 @@ async def handle_history_update(user: User, history: list, db: Session):
 @app.get("/api/auth/session")
 async def get_session(request: Request, user: User = Depends(get_current_user)):
     """Get current session user info"""
+    session_id = get_session_id_from_request(request)
     return {
-        "session_id": request.cookies.get("session_id", "unknown"), 
+        "session_id": session_id,
         "user_id": user.id,
         "username": user.username,
         "api_key": user.api_key,
@@ -341,9 +356,10 @@ async def get_session(request: Request, user: User = Depends(get_current_user)):
 @app.post("/api/auth/session")
 async def create_session(request: Request, db: Session = Depends(get_db)):
     """Create/get session user info"""
+    session_id = get_session_id_from_request(request)
     user = get_current_user(request, db)
     return {
-        "session_id": request.cookies.get("session_id", "unknown"),
+        "session_id": session_id,
         "user_id": user.id,
         "username": user.username,
         "api_key": user.api_key,

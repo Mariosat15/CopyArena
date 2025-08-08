@@ -19,6 +19,12 @@ export const api = axios.create({
 // Add request interceptor for auth token and debugging
 api.interceptors.request.use(
   (config) => {
+    // Add session ID if available
+    const sessionId = localStorage.getItem('copyarena_session_id')
+    if (sessionId) {
+      config.headers['X-Session-ID'] = sessionId
+    }
+    
     // Add auth token if available
     const authStore = JSON.parse(localStorage.getItem('auth-storage') || '{}')
     const token = authStore.state?.token
@@ -29,6 +35,7 @@ api.interceptors.request.use(
     if (!isProduction) {
       console.log(`API Request: ${config.method?.toUpperCase()} ${config.baseURL}${config.url}`)
     }
+    
     return config
   },
   (error) => {
