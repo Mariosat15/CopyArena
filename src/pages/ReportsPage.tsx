@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import React, { useState } from 'react'
 import { useAuthStore } from '../stores/authStore'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Button } from '../components/ui/button'
@@ -59,7 +59,8 @@ export function ReportsPage() {
 
     setIsGenerating(true)
     try {
-      // TODO: Implement AI report generation
+      // TODO: Implement AI report generation for ${reportType}
+      console.log(`Generating report: ${reportType}`)
       await new Promise(resolve => setTimeout(resolve, 3000)) // Simulate API call
       
       toast({

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useTradingStore } from '../stores/tradingStore'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Button } from '../components/ui/button'
@@ -142,7 +142,7 @@ export function LeaderboardPage() {
                     </div>
                     <div className="text-sm text-muted-foreground">
                       {sortBy === 'xp_points' && `Level ${trader.level}`}
-                      {sortBy === 'total_profit' && `${trader.total_trades || 0} trades`}
+                      {sortBy === 'total_profit' && `${trader.stats?.total_trades || 0} trades`}
                       {sortBy === 'followers_count' && 'followers'}
                     </div>
                   </div>

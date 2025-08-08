@@ -4,8 +4,8 @@ import { useTradingStore } from '../stores/tradingStore'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
-import { TrendingUp, TrendingDown, Users, Trophy, Target, Zap, RefreshCw, Activity, DollarSign, PieChart, Calculator } from 'lucide-react'
-import { formatCurrency, formatPercentage, getProgressToNextLevel } from '../lib/utils'
+import { TrendingUp, Users, Trophy, Target, Zap, RefreshCw, Activity, DollarSign, PieChart, Calculator } from 'lucide-react'
+import { formatCurrency, getProgressToNextLevel } from '../lib/utils'
 import { useToast } from '../hooks/use-toast'
 
 export function DashboardPage() {
@@ -81,7 +81,7 @@ export function DashboardPage() {
   const historicalProfit = accountStats?.trading.historical_profit ?? trades.filter(t => !t.is_open).reduce((sum, trade) => sum + trade.profit, 0)
   const floatingProfit = accountStats?.trading.floating_profit ?? trades.filter(t => t.is_open).reduce((sum, trade) => sum + trade.profit, 0)
   const winRate = accountStats?.trading.win_rate ?? (trades.length > 0 ? (trades.filter(trade => trade.profit > 0).length / trades.length) * 100 : 0)
-  const progressToNextLevel = getProgressToNextLevel(user.xp_points, user.level)
+  // const progressToNextLevel = getProgressToNextLevel(user.xp_points, user.level) // TODO: Use for level progress
 
   return (
     <div className="space-y-6">

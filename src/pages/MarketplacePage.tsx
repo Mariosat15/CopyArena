@@ -1,12 +1,12 @@
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useTradingStore } from '../stores/tradingStore'
 import { useAuthStore } from '../stores/authStore'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Button } from '../components/ui/button'
 import { Badge } from '../components/ui/badge'
 import { Input } from '../components/ui/input'
-import { Search, Users, TrendingUp, Star } from 'lucide-react'
-import { formatCurrency, formatPercentage } from '../lib/utils'
+import { Search, Users, Star } from 'lucide-react'
+import { formatCurrency } from '../lib/utils'
 import { toast } from '../hooks/use-toast'
 
 export function MarketplacePage() {

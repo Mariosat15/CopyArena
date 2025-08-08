@@ -1,6 +1,7 @@
+import React from 'react'
 import { useAuthStore } from '../stores/authStore'
 import { Button } from './ui/button'
-import { Badge } from './ui/badge'
+
 import { Bell, Settings, CreditCard } from 'lucide-react'
 
 export function Header() {

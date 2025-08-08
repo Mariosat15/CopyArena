@@ -88,7 +88,7 @@ interface TradingState {
   updateTraderStatus: (traderId: number, isOnline: boolean) => void
 }
 
-export const useTradingStore = create<TradingState>((set, get) => ({
+export const useTradingStore = create<TradingState>((set) => ({
   trades: [],
   accountStats: null,
   traders: [],
