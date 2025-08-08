@@ -123,19 +123,32 @@ def get_user_by_api_key(api_key: str, db: Session) -> User:
 async def receive_ea_data(request: Request, db: Session = Depends(get_db)):
     """Receive data from Expert Advisor"""
     try:
+        # Log incoming request
+        client_host = request.client.host if request.client else "unknown"
+        user_agent = request.headers.get("user-agent", "unknown")
+        content_type = request.headers.get("content-type", "unknown")
+        
+        logger.info(f"EA request from {client_host}, User-Agent: {user_agent}, Content-Type: {content_type}")
+        
         data = await request.json()
         api_key = data.get("api_key")
         data_type = data.get("type")
         timestamp = data.get("timestamp")
         payload = data.get("data")
         
+        logger.info(f"EA data received - Type: {data_type}, API Key: {api_key[:8] if api_key else 'None'}...")
+        
         if not api_key:
+            logger.warning("EA request missing API key")
             raise HTTPException(status_code=400, detail="API key required")
         
         # Get user by API key
         user = get_user_by_api_key(api_key, db)
         if not user:
+            logger.warning(f"Invalid API key attempted: {api_key[:8]}...")
             raise HTTPException(status_code=401, detail="Invalid API key")
+        
+        logger.info(f"EA data from user {user.username} - Type: {data_type}")
         
         # Update user's last seen time
         user.last_seen = datetime.utcnow()
@@ -161,10 +174,14 @@ async def receive_ea_data(request: Request, db: Session = Depends(get_db)):
             "timestamp": timestamp
         }, user.id)
         
+        logger.info(f"EA data processed successfully for user {user.username}")
         return {"status": "success", "message": "Data received"}
         
+    except HTTPException as e:
+        logger.error(f"HTTP Error processing EA data: {e.detail}")
+        raise e
     except Exception as e:
-        logger.error(f"Error processing EA data: {e}")
+        logger.error(f"Unexpected error processing EA data: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 async def handle_connection_status(user: User, data: dict, db: Session):
