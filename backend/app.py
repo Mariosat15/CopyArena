@@ -455,10 +455,46 @@ async def get_account_stats(user: User = Depends(get_current_user), db: Session 
         "is_connected": connection.is_connected if connection else False
     }
 
+@app.get("/api/user/profile")
+async def get_user_profile(user: User = Depends(get_current_user)):
+    """Get user profile information"""
+    return {
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "api_key": user.api_key,
+            "subscription_plan": user.subscription_plan,
+            "credits": user.credits,
+            "xp_points": user.xp_points,
+            "level": user.level,
+            "is_online": user.is_online,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+            "last_seen": user.last_seen.isoformat() if user.last_seen else None
+        }
+    }
+
+@app.get("/api/mt5/status")
+async def get_mt5_status(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Get MT5 connection status"""
+    connection = db.query(MT5Connection).filter(MT5Connection.user_id == user.id).first()
+    return {
+        "is_connected": connection.is_connected if connection else False,
+        "account_number": connection.login if connection else None,
+        "last_sync": connection.last_sync.isoformat() if connection and connection.last_sync else None
+    }
+
 @app.get("/api/ea/download")
 async def download_ea(user: User = Depends(get_current_user)):
     """Download Expert Advisor file"""
-    ea_path = Path("ea/CopyArenaConnector.mq5")
+    ea_path = Path(__file__).parent / "ea" / "CopyArenaConnector.mq5"
+    if not ea_path.exists():
+        # Try relative path from backend directory
+        ea_path = Path("../ea/CopyArenaConnector.mq5")
+    if not ea_path.exists():
+        # Try absolute path from project root
+        ea_path = Path(__file__).parent.parent / "ea" / "CopyArenaConnector.mq5"
+    
     if ea_path.exists():
         return FileResponse(
             ea_path,
@@ -467,7 +503,7 @@ async def download_ea(user: User = Depends(get_current_user)):
             headers={"Content-Disposition": "attachment; filename=CopyArenaConnector.mq5"}
         )
     else:
-        raise HTTPException(status_code=404, detail="EA file not found")
+        raise HTTPException(status_code=404, detail=f"EA file not found. Checked: {ea_path}")
 
 @app.get("/api/leaderboard")
 async def get_leaderboard(db: Session = Depends(get_db)):
