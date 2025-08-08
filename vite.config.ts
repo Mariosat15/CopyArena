@@ -28,16 +28,16 @@ export default defineConfig({
       'copyarena.onrender.com',
       '.onrender.com' // Allow all Render subdomains
     ],
-    proxy: {
-      '/api': {
-        target: 'http://127.0.0.1:8001',
-        changeOrigin: true,
-      },
-      '/ws': {
-        target: 'ws://127.0.0.1:8001',
-        ws: true,
-        changeOrigin: true,
-      }
-    }
+                proxy: {
+              '/api': {
+                target: 'http://127.0.0.1:8002',
+                changeOrigin: true,
+              },
+              '/ws': {
+                target: 'ws://127.0.0.1:8002',
+                ws: true,
+                changeOrigin: true,
+              }
+            }
   }
 }) 

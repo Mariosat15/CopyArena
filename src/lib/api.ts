@@ -5,7 +5,7 @@ const isProduction = window.location.hostname !== 'localhost' && window.location
 
 const API_BASE_URL = isProduction 
   ? `${window.location.protocol}//${window.location.host}`
-  : 'http://127.0.0.1:8001'
+  : 'http://127.0.0.1:8002'
 
 // Create axios instance with base configuration
 export const api = axios.create({
