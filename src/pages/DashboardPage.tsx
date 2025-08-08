@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react' // eslint-disable-line @typescript-eslint/no-unused-vars
 import { useAuthStore } from '../stores/authStore'
 import { useTradingStore } from '../stores/tradingStore'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { TrendingUp, Users, Trophy, Target, Zap, RefreshCw, Activity, DollarSign, PieChart, Calculator } from 'lucide-react'
-import { formatCurrency, getProgressToNextLevel } from '../lib/utils'
+import { formatCurrency } from '../lib/utils'
 import { useToast } from '../hooks/use-toast'
 
 export function DashboardPage() {

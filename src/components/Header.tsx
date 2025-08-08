@@ -1,4 +1,4 @@
-import React from 'react'
+import React from 'react' // eslint-disable-line @typescript-eslint/no-unused-vars
 import { useAuthStore } from '../stores/authStore'
 import { Button } from './ui/button'
 
