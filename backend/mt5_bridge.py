@@ -1,4 +1,3 @@
-import MetaTrader5 as mt5
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -8,6 +7,20 @@ from typing import List, Dict, Optional, Any
 import logging
 from dataclasses import dataclass
 from sqlalchemy.orm import Session
+import os
+import platform
+
+# Conditional MT5 import - use mock for cloud deployment
+try:
+    import MetaTrader5 as mt5
+    MT5_AVAILABLE = True
+    logger = logging.getLogger(__name__)
+    logger.info("MT5 library loaded successfully - Windows environment detected")
+except ImportError:
+    from mt5_mock import mock_mt5 as mt5, MockAccountInfo, MockTradePosition
+    MT5_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.info("MT5 library not available - using mock for cloud deployment")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -66,7 +79,24 @@ class MT5Bridge:
                     self.password = password
                     self.server = server
                 
-                # Initialize MT5 connection
+                # Handle cloud deployment (mock MT5)
+                if not MT5_AVAILABLE:
+                    logger.info(f"User {self.user_id}: Using mock MT5 for cloud deployment")
+                    if not mt5.initialize():
+                        logger.error(f"User {self.user_id}: Failed to initialize mock MT5")
+                        return False
+                    
+                    # Mock login
+                    if login and password and server:
+                        if not mt5.login(login, password, server):
+                            logger.error(f"User {self.user_id}: Failed to login to mock MT5")
+                            return False
+                        logger.info(f"User {self.user_id}: Successfully connected to mock MT5 account {login}")
+                    
+                    self.connected = True
+                    return True
+                
+                # Initialize real MT5 connection (Windows)
                 if not mt5.initialize():
                     logger.error(f"User {self.user_id}: Failed to initialize MT5")
                     return False

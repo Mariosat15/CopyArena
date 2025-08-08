@@ -1,3 +1,14 @@
+"""
+CopyArena Backend API
+
+This backend supports both:
+1. Local development with real MT5 connections (Windows)
+2. Cloud deployment with mock MT5 for demo purposes (Linux/Render)
+
+In cloud mode, MT5 functionality is simulated to allow the app to run
+on Linux servers where MetaTrader5 library is not available.
+"""
+
 from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, Request, Response, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
