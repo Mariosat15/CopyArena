@@ -73,6 +73,10 @@ interface TradingState {
   follows: Follow[]
   leaderboard: Trader[]
   
+  // LIVE EA Data (bypasses database)
+  livePositions: any[]
+  liveAccountStats: any
+  
   // Actions
   fetchTrades: () => Promise<void>
   fetchAccountStats: () => Promise<void>
@@ -86,6 +90,10 @@ interface TradingState {
   updateTrade: (trade: Trade) => void
   removeDuplicateTrades: () => void
   updateTraderStatus: (traderId: number, isOnline: boolean) => void
+  
+  // LIVE EA Data Updates
+  setLivePositions: (positions: any[]) => void
+  setLiveAccountStats: (stats: any) => void
 }
 
 export const useTradingStore = create<TradingState>((set) => ({
@@ -94,22 +102,31 @@ export const useTradingStore = create<TradingState>((set) => ({
   traders: [],
   follows: [],
   leaderboard: [],
+  
+  // LIVE EA Data
+  livePositions: [],
+  liveAccountStats: null,
 
   fetchTrades: async () => {
     try {
+      console.log('🔄 Fetching trades...')
       const response = await api.get('/api/trades')
-      set({ trades: response.data })
+      const trades = response.data.trades || response.data || []
+      console.log(`✅ Fetched ${trades.length} trades`)
+      set({ trades })
     } catch (error) {
-      console.error('Failed to fetch trades:', error)
+      console.error('❌ Failed to fetch trades:', error)
     }
   },
 
   fetchAccountStats: async () => {
     try {
-              const response = await api.get('/api/account/stats')
+      console.log('🔄 Fetching account stats...')
+      const response = await api.get('/api/account/stats')
+      console.log('✅ Account stats:', response.data)
       set({ accountStats: response.data })
     } catch (error) {
-      console.error('Failed to fetch account stats:', error)
+      console.error('❌ Failed to fetch account stats:', error)
     }
   },
 
@@ -231,5 +248,16 @@ export const useTradingStore = create<TradingState>((set) => ({
         trader.id === traderId ? { ...trader, is_online: isOnline } : trader
       )
     }))
+  },
+
+  // LIVE EA Data Setters
+  setLivePositions: (positions: any[]) => {
+    console.log('🎯 Setting LIVE positions:', positions)
+    set({ livePositions: positions })
+  },
+
+  setLiveAccountStats: (stats: any) => {
+    console.log('🎯 Setting LIVE account stats:', stats)
+    set({ liveAccountStats: stats })
   }
 })) 

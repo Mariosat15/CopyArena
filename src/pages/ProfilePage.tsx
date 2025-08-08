@@ -29,20 +29,24 @@ export default function ProfilePage() {
 
   const fetchUserData = async () => {
     try {
-      // Use session service to get persistent API key
-      const sessionService = SessionService.getInstance()
-      const sessionData = await sessionService.initializeSession()
-      setApiKey(sessionData.api_key)
-      
-      // Get full user profile
+      // Get full user profile first
       const profileResponse = await api.get('/api/user/profile')
-      setUserInfo(profileResponse.data)
+      console.log('Profile response:', profileResponse.data) // Debug log
+      
+      const user = profileResponse.data.user
+      setUserInfo(user) // Set user info
+      setApiKey(user.api_key) // FIX: Use REAL user API key, not session API key
       
       // Check connection status
       const statsResponse = await api.get('/api/account/stats')
       setIsConnected(statsResponse.data.is_connected)
     } catch (error) {
       console.error('Error fetching user data:', error)
+      toast({
+        title: "Error",
+        description: "Failed to load user data",
+        variant: "destructive"
+      })
     }
   }
 

@@ -102,6 +102,58 @@ export const useWebSocket = (userId?: number) => {
             // No toast notification for account updates - too frequent
             break
 
+          case 'positions_update':
+            console.log('🚀 LIVE Positions from EA:', data.data)
+            // Update UI DIRECTLY with EA data (not database)
+            useTradingStore.getState().setLivePositions(data.data)
+            // Also update account stats
+            useTradingStore.getState().fetchAccountStats()
+            break
+
+          case 'account_update':
+            console.log('🚀 LIVE Account from EA:', data.data)
+            // Update UI DIRECTLY with EA account data
+            useTradingStore.getState().setLiveAccountStats(data.data)
+            break
+
+          case 'positions_updated':
+            console.log('🚀 LIVE positions updated:', data.data)
+            // This is for database sync confirmation only
+            if (data.data?.new > 0) {
+              toast({
+                title: "New Trade Opened! 📈",
+                description: `${data.data.new} new trade(s) detected`,
+              })
+            }
+            break
+
+          case 'orders_update':
+            console.log('Orders update:', data.data)
+            // Refresh account stats when orders change
+            useTradingStore.getState().fetchAccountStats()
+            break
+
+          case 'history_update':
+            console.log('History update:', data.data)
+            // Refresh trades and stats when history changes
+            useTradingStore.getState().fetchTrades()
+            useTradingStore.getState().fetchAccountStats()
+            break
+
+          case 'connection_status':
+            console.log('EA connection status:', data.data)
+            // Force refresh all data when EA connects/reconnects
+            if (data.data.is_connected) {
+              console.log('🚀 EA connected - refreshing all data')
+              useTradingStore.getState().fetchTrades()
+              useTradingStore.getState().fetchAccountStats()
+              toast({
+                title: "MT5 Connected! 🎯",
+                description: "Your EA is now sending live trading data",
+              })
+            }
+            break
+
           case 'xp_update':
             updateUser({ xp_points: data.data.new_total })
             toast({

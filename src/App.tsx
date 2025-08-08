@@ -15,7 +15,7 @@ import MT5ConnectionPage from './pages/MT5ConnectionPage'
 import { Layout } from './components/Layout'
 import { Toaster } from './components/ui/toaster'
 import { useEffect, useState } from 'react'
-import SessionService from './lib/sessionService'
+
 
 function App() {
   const { user, initializeAuth } = useAuthStore()
@@ -25,17 +25,11 @@ function App() {
   useEffect(() => {
     const initializeApp = async () => {
       try {
-        // Initialize session first
-        const sessionService = SessionService.getInstance()
-        await sessionService.initializeSession()
+        // ONLY use auth store - no more session service conflicts
+        await initializeAuth()
         setSessionInitialized(true)
-        
-        // Then initialize auth
-        initializeAuth()
       } catch (error) {
-        console.error('Failed to initialize app:', error)
-        // Fallback to auth initialization even if session fails
-        initializeAuth()
+        console.error('Failed to initialize auth:', error)
         setSessionInitialized(true)
       }
     }

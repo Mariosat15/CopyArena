@@ -11,7 +11,15 @@ import { useToast } from '../hooks/use-toast'
 
 export function DashboardPage() {
   const { user } = useAuthStore()
-  const { trades, accountStats, fetchTrades, fetchAccountStats, removeDuplicateTrades } = useTradingStore()
+  const { 
+    trades, 
+    accountStats, 
+    livePositions, 
+    liveAccountStats,
+    fetchTrades, 
+    fetchAccountStats, 
+    removeDuplicateTrades 
+  } = useTradingStore()
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [lastMarginLevel, setLastMarginLevel] = useState<number | null>(null)
@@ -117,10 +125,10 @@ export function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {formatCurrency(accountStats?.account.balance ?? 0)}
+              {formatCurrency(liveAccountStats?.balance ?? accountStats?.account.balance ?? 0)}
             </div>
             <p className="text-xs text-muted-foreground">
-              {accountStats?.account.currency ?? 'USD'} Account Balance
+              {liveAccountStats ? '🚀 Live' : (accountStats?.account.currency ?? 'USD')} Account Balance
             </p>
           </CardContent>
         </Card>
@@ -128,14 +136,14 @@ export function DashboardPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Equity</CardTitle>
-            <PieChart className={`h-4 w-4 ${(accountStats?.account.margin_level ?? 0) <= 150 ? 'text-red-500' : 'text-muted-foreground'}`} />
+            <PieChart className={`h-4 w-4 ${(liveAccountStats?.margin_level ?? accountStats?.account.margin_level ?? 0) <= 150 ? 'text-red-500' : 'text-muted-foreground'}`} />
           </CardHeader>
           <CardContent>
-            <div className={`text-2xl font-bold ${(accountStats?.account.margin_level ?? 0) <= 150 ? 'text-red-600' : ''}`}>
-              {formatCurrency(accountStats?.account.equity ?? 0)}
+            <div className={`text-2xl font-bold ${(liveAccountStats?.margin_level ?? accountStats?.account.margin_level ?? 0) <= 150 ? 'text-red-600' : ''}`}>
+              {formatCurrency(liveAccountStats?.equity ?? accountStats?.account.equity ?? 0)}
             </div>
-            <p className={`text-xs ${(accountStats?.account.margin_level ?? 0) <= 150 ? 'text-red-500' : 'text-muted-foreground'}`}>
-              {(accountStats?.account.margin_level ?? 0) <= 150 ? 'EQUITY AT RISK!' : 'Current Account Equity'}
+            <p className={`text-xs ${(liveAccountStats?.margin_level ?? accountStats?.account.margin_level ?? 0) <= 150 ? 'text-red-500' : 'text-muted-foreground'}`}>
+              {liveAccountStats ? '🚀 Live Equity' : ((accountStats?.account.margin_level ?? 0) <= 150 ? 'EQUITY AT RISK!' : 'Current Account Equity')}
             </p>
           </CardContent>
         </Card>
@@ -234,14 +242,14 @@ export function DashboardPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Live Trades</CardTitle>
-            <Zap className="h-4 w-4 text-green-500" />
+            <Zap className={`h-4 w-4 ${livePositions.length > 0 ? 'text-green-500' : 'text-gray-400'}`} />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-green-600">
-              {accountStats?.trading.open_trades ?? trades.filter(t => t.is_open).length}
+              {livePositions.length > 0 ? livePositions.length : (accountStats?.trading.open_trades ?? trades.filter(t => t.is_open).length)}
             </div>
             <p className="text-xs text-muted-foreground">
-              Currently open
+              {livePositions.length > 0 ? 'Live from EA' : 'From database'}
             </p>
           </CardContent>
         </Card>
@@ -257,8 +265,37 @@ export function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {trades.slice(0, 5).map((trade) => (
-                <div key={trade.id} className="flex items-center justify-between">
+              {/* LIVE POSITIONS from EA - Real-time data */}
+              {livePositions.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-green-600 uppercase tracking-wide">🚀 Live from EA</p>
+                  {livePositions.slice(0, 3).map((pos, index) => (
+                    <div key={`live-${pos.ticket}-${index}`} className="flex items-center justify-between border-l-2 border-green-500 pl-3">
+                      <div className="flex items-center space-x-3">
+                        <div className={`w-2 h-2 rounded-full ${pos.type === 0 ? 'bg-green-500' : 'bg-red-500'}`} />
+                        <div>
+                          <p className="text-sm font-medium">{pos.symbol}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {pos.type === 0 ? 'BUY' : 'SELL'} {pos.volume} lots
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className={`text-sm font-medium ${pos.profit >= 0 ? 'profit-text' : 'loss-text'}`}>
+                          {formatCurrency(pos.profit)}
+                        </p>
+                        <Badge variant="secondary" className="bg-green-100 text-green-700">
+                          LIVE
+                        </Badge>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Database trades - Historical/fallback */}
+              {trades.slice(0, livePositions.length > 0 ? 2 : 5).map((trade, index) => (
+                <div key={`db-${trade.id}-${trade.ticket}-${index}`} className="flex items-center justify-between">
                   <div className="flex items-center space-x-3">
                     <div className={`w-2 h-2 rounded-full ${trade.trade_type === 'BUY' ? 'bg-green-500' : 'bg-red-500'}`} />
                     <div>
@@ -278,7 +315,8 @@ export function DashboardPage() {
                   </div>
                 </div>
               ))}
-              {trades.length === 0 && (
+
+              {trades.length === 0 && livePositions.length === 0 && (
                 <p className="text-center text-muted-foreground py-4">
                   No trades yet. Connect your MT4/MT5 to start trading.
                 </p>

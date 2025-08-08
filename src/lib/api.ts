@@ -9,6 +9,14 @@ const API_BASE_URL = isProduction
   ? `${window.location.protocol}//${window.location.host}`
   : `http://${window.location.hostname}:8002`
 
+console.log('🔧 API Configuration:', {
+  hostname: window.location.hostname,
+  isLocalhost,
+  isNetworkAccess,
+  isProduction,
+  API_BASE_URL
+})
+
 // Create axios instance with base configuration
 export const api = axios.create({
   baseURL: API_BASE_URL,
@@ -21,12 +29,6 @@ export const api = axios.create({
 // Add request interceptor for auth token and debugging
 api.interceptors.request.use(
   (config) => {
-    // Add session ID if available
-    const sessionId = localStorage.getItem('copyarena_session_id')
-    if (sessionId) {
-      config.headers['X-Session-ID'] = sessionId
-    }
-    
     // Add auth token if available
     const authStore = JSON.parse(localStorage.getItem('auth-storage') || '{}')
     const token = authStore.state?.token

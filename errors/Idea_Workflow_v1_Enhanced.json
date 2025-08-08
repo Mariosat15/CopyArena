@@ -1,0 +1,840 @@
+{
+  "name": "Idea_Workflow_v1_Enhanced",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "5b12bee1-e387-4167-8a79-996d05a8d406",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1200,
+        400
+      ],
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "webhookId": "5b12bee1-e387-4167-8a79-996d05a8d406"
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "location": "allReddit",
+        "keyword": "={{ $('Webhook Trigger').item.json.Topic }} problem issue struggle",
+        "additionalFields": {
+          "sort": "hot",
+          "limit": 50
+        }
+      },
+      "type": "n8n-nodes-base.reddit",
+      "typeVersion": 1,
+      "position": [
+        -900,
+        200
+      ],
+      "id": "reddit-search-problems",
+      "name": "Reddit Search - Problems",
+      "credentials": {
+        "redditOAuth2Api": {
+          "id": "uyiNgRBWg8SS2Gqo",
+          "name": "Reddit account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "location": "allReddit",
+        "keyword": "={{ $('Webhook Trigger').item.json.Topic }} solution doesn't work failed tried",
+        "additionalFields": {
+          "sort": "hot",
+          "limit": 50
+        }
+      },
+      "type": "n8n-nodes-base.reddit",
+      "typeVersion": 1,
+      "position": [
+        -900,
+        350
+      ],
+      "id": "reddit-search-failed-solutions",
+      "name": "Reddit Search - Failed Solutions",
+      "credentials": {
+        "redditOAuth2Api": {
+          "id": "uyiNgRBWg8SS2Gqo",
+          "name": "Reddit account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "location": "allReddit",
+        "keyword": "={{ $('Webhook Trigger').item.json.Topic }} \"wish there was\" \"need an app\" \"someone should build\"",
+        "additionalFields": {
+          "sort": "hot",
+          "limit": 50
+        }
+      },
+      "type": "n8n-nodes-base.reddit",
+      "typeVersion": 1,
+      "position": [
+        -900,
+        500
+      ],
+      "id": "reddit-search-wish-list",
+      "name": "Reddit Search - Wish List",
+      "credentials": {
+        "redditOAuth2Api": {
+          "id": "uyiNgRBWg8SS2Gqo",
+          "name": "Reddit account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "location": "allReddit",
+        "keyword": "={{ $('Webhook Trigger').item.json.Topic }} \"I would pay\" expensive \"costs too much\" \"worth paying\"",
+        "additionalFields": {
+          "sort": "hot",
+          "limit": 50
+        }
+      },
+      "type": "n8n-nodes-base.reddit",
+      "typeVersion": 1,
+      "position": [
+        -900,
+        650
+      ],
+      "id": "reddit-search-payment-willingness",
+      "name": "Reddit Search - Payment Willingness",
+      "credentials": {
+        "redditOAuth2Api": {
+          "id": "uyiNgRBWg8SS2Gqo",
+          "name": "Reddit account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "location": "allReddit",
+        "keyword": "={{ $('Webhook Trigger').item.json.Topic }} review sucks \"doesn't work\" disappointed",
+        "additionalFields": {
+          "sort": "hot",
+          "limit": 50
+        }
+      },
+      "type": "n8n-nodes-base.reddit",
+      "typeVersion": 1,
+      "position": [
+        -900,
+        800
+      ],
+      "id": "reddit-search-negative-reviews",
+      "name": "Reddit Search - Negative Reviews",
+      "credentials": {
+        "redditOAuth2Api": {
+          "id": "uyiNgRBWg8SS2Gqo",
+          "name": "Reddit account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "search-type-1",
+              "name": "searchType",
+              "value": "problems",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-1",
+              "name": "selftext",
+              "value": "={{ $json.selftext }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-2",
+              "name": "title",
+              "value": "={{ $json.title }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-3",
+              "name": "score",
+              "value": "={{ $json.score || 0 }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-4",
+              "name": "num_comments",
+              "value": "={{ $json.num_comments || 0 }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-5",
+              "name": "subreddit",
+              "value": "={{ $json.subreddit }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-6",
+              "name": "created_utc",
+              "value": "={{ $json.created_utc }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -650,
+        200
+      ],
+      "id": "format-problems",
+      "name": "Format Problems Data"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "search-type-2",
+              "name": "searchType",
+              "value": "failedSolutions",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-7",
+              "name": "selftext",
+              "value": "={{ $json.selftext }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-8",
+              "name": "title",
+              "value": "={{ $json.title }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-9",
+              "name": "score",
+              "value": "={{ $json.score || 0 }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-10",
+              "name": "num_comments",
+              "value": "={{ $json.num_comments || 0 }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-11",
+              "name": "subreddit",
+              "value": "={{ $json.subreddit }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-12",
+              "name": "created_utc",
+              "value": "={{ $json.created_utc }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -650,
+        350
+      ],
+      "id": "format-failed-solutions",
+      "name": "Format Failed Solutions"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "search-type-3",
+              "name": "searchType",
+              "value": "wishList",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-13",
+              "name": "selftext",
+              "value": "={{ $json.selftext }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-14",
+              "name": "title",
+              "value": "={{ $json.title }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-15",
+              "name": "score",
+              "value": "={{ $json.score || 0 }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-16",
+              "name": "num_comments",
+              "value": "={{ $json.num_comments || 0 }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-17",
+              "name": "subreddit",
+              "value": "={{ $json.subreddit }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-18",
+              "name": "created_utc",
+              "value": "={{ $json.created_utc }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -650,
+        500
+      ],
+      "id": "format-wish-list",
+      "name": "Format Wish List"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "search-type-4",
+              "name": "searchType",
+              "value": "paymentWillingness",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-19",
+              "name": "selftext",
+              "value": "={{ $json.selftext }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-20",
+              "name": "title",
+              "value": "={{ $json.title }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-21",
+              "name": "score",
+              "value": "={{ $json.score || 0 }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-22",
+              "name": "num_comments",
+              "value": "={{ $json.num_comments || 0 }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-23",
+              "name": "subreddit",
+              "value": "={{ $json.subreddit }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-24",
+              "name": "created_utc",
+              "value": "={{ $json.created_utc }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -650,
+        650
+      ],
+      "id": "format-payment-willingness",
+      "name": "Format Payment Willingness"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "search-type-5",
+              "name": "searchType",
+              "value": "negativeReviews",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-25",
+              "name": "selftext",
+              "value": "={{ $json.selftext }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-26",
+              "name": "title",
+              "value": "={{ $json.title }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-27",
+              "name": "score",
+              "value": "={{ $json.score || 0 }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-28",
+              "name": "num_comments",
+              "value": "={{ $json.num_comments || 0 }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-29",
+              "name": "subreddit",
+              "value": "={{ $json.subreddit }}",
+              "type": "string"
+            },
+            {
+              "id": "data-extraction-30",
+              "name": "created_utc",
+              "value": "={{ $json.created_utc }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -650,
+        800
+      ],
+      "id": "format-negative-reviews",
+      "name": "Format Negative Reviews"
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "destinationFieldName": "allRedditData",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        -400,
+        500
+      ],
+      "id": "aggregate-all-data",
+      "name": "Aggregate All Reddit Data"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "categorize-data-1",
+              "name": "problemPosts",
+              "value": "={{ $json.allRedditData.filter(item => item.searchType === 'problems') }}",
+              "type": "array"
+            },
+            {
+              "id": "categorize-data-2",
+              "name": "failedSolutionPosts",
+              "value": "={{ $json.allRedditData.filter(item => item.searchType === 'failedSolutions') }}",
+              "type": "array"
+            },
+            {
+              "id": "categorize-data-3",
+              "name": "wishListPosts",
+              "value": "={{ $json.allRedditData.filter(item => item.searchType === 'wishList') }}",
+              "type": "array"
+            },
+            {
+              "id": "categorize-data-4",
+              "name": "paymentWillingnessPosts",
+              "value": "={{ $json.allRedditData.filter(item => item.searchType === 'paymentWillingness') }}",
+              "type": "array"
+            },
+            {
+              "id": "categorize-data-5",
+              "name": "negativeReviewPosts",
+              "value": "={{ $json.allRedditData.filter(item => item.searchType === 'negativeReviews') }}",
+              "type": "array"
+            },
+            {
+              "id": "stats-calculation-1",
+              "name": "totalPosts",
+              "value": "={{ $json.allRedditData.length }}",
+              "type": "string"
+            },
+            {
+              "id": "stats-calculation-2",
+              "name": "totalUpvotes",
+              "value": "={{ $json.allRedditData.reduce((sum, item) => sum + parseInt(item.score || 0), 0) }}",
+              "type": "string"
+            },
+            {
+              "id": "stats-calculation-3",
+              "name": "totalComments",
+              "value": "={{ $json.allRedditData.reduce((sum, item) => sum + parseInt(item.num_comments || 0), 0) }}",
+              "type": "string"
+            },
+            {
+              "id": "stats-calculation-4",
+              "name": "uniqueSubreddits",
+              "value": "={{ [...new Set($json.allRedditData.map(item => item.subreddit))].length }}",
+              "type": "string"
+            },
+            {
+              "id": "validation-score-1",
+              "name": "problemValidationScore",
+              "value": "={{ Math.round((($json.allRedditData.filter(item => item.searchType === 'problems').length * 30) + ($json.allRedditData.filter(item => item.searchType === 'failedSolutions').length * 50) + ($json.allRedditData.filter(item => item.searchType === 'wishList').length * 40) + ($json.allRedditData.filter(item => item.searchType === 'paymentWillingness').length * 60) + ($json.allRedditData.filter(item => item.searchType === 'negativeReviews').length * 45)) / Math.max($json.allRedditData.length, 1)) }}",
+              "type": "string"
+            },
+            {
+              "id": "validation-score-2",
+              "name": "marketDemandScore",
+              "value": "={{ Math.min(100, Math.round(($json.allRedditData.length * 2) + ($json.allRedditData.reduce((sum, item) => sum + parseInt(item.score || 0), 0) / Math.max($json.allRedditData.length, 1)) + ([...new Set($json.allRedditData.map(item => item.subreddit))].length * 5))) }}",
+              "type": "string"
+            },
+            {
+              "id": "enhanced-pain-analysis-1",
+              "name": "sleepProblems",
+              "value": "={{ $json.allRedditData.filter(item => { const text = ((item.selftext || '') + ' ' + (item.title || '')).toLowerCase(); return (text.includes('sleep') || text.includes('insomnia') || text.includes('tired') || text.includes('wake up')) && (text.includes('problem') || text.includes('issue') || text.includes('struggle') || text.includes('can\\'t') || text.includes('difficult')); }).length }}",
+              "type": "string"
+            },
+            {
+              "id": "enhanced-pain-analysis-2",
+              "name": "productivityProblems",
+              "value": "={{ $json.allRedditData.filter(item => { const text = ((item.selftext || '') + ' ' + (item.title || '')).toLowerCase(); return (text.includes('productiv') || text.includes('focus') || text.includes('distract') || text.includes('time management') || text.includes('procrastin')) && (text.includes('problem') || text.includes('issue') || text.includes('struggle') || text.includes('can\\'t') || text.includes('difficult')); }).length }}",
+              "type": "string"
+            },
+            {
+              "id": "enhanced-pain-analysis-3",
+              "name": "moneyProblems",
+              "value": "={{ $json.allRedditData.filter(item => { const text = ((item.selftext || '') + ' ' + (item.title || '')).toLowerCase(); return (text.includes('money') || text.includes('budget') || text.includes('expensive') || text.includes('afford') || text.includes('broke') || text.includes('financial')) && (text.includes('problem') || text.includes('issue') || text.includes('struggle') || text.includes('can\\'t') || text.includes('difficult')); }).length }}",
+              "type": "string"
+            },
+            {
+              "id": "enhanced-pain-analysis-4",
+              "name": "relationshipProblems",
+              "value": "={{ $json.allRedditData.filter(item => { const text = ((item.selftext || '') + ' ' + (item.title || '')).toLowerCase(); return (text.includes('dating') || text.includes('relationship') || text.includes('lonely') || text.includes('friends') || text.includes('social')) && (text.includes('problem') || text.includes('issue') || text.includes('struggle') || text.includes('can\\'t') || text.includes('difficult')); }).length }}",
+              "type": "string"
+            },
+            {
+              "id": "enhanced-pain-analysis-5",
+              "name": "healthProblems",
+              "value": "={{ $json.allRedditData.filter(item => { const text = ((item.selftext || '') + ' ' + (item.title || '')).toLowerCase(); return (text.includes('health') || text.includes('fitness') || text.includes('weight') || text.includes('exercise') || text.includes('diet')) && (text.includes('problem') || text.includes('issue') || text.includes('struggle') || text.includes('can\\'t') || text.includes('difficult')); }).length }}",
+              "type": "string"
+            },
+            {
+              "id": "enhanced-pain-analysis-6",
+              "name": "workProblems",
+              "value": "={{ $json.allRedditData.filter(item => { const text = ((item.selftext || '') + ' ' + (item.title || '')).toLowerCase(); return (text.includes('work') || text.includes('job') || text.includes('career') || text.includes('boss') || text.includes('coworker')) && (text.includes('problem') || text.includes('issue') || text.includes('struggle') || text.includes('can\\'t') || text.includes('difficult') || text.includes('hate') || text.includes('stress')); }).length }}",
+              "type": "string"
+            },
+            {
+              "id": "enhanced-pain-analysis-7",
+              "name": "techProblems",
+              "value": "={{ $json.allRedditData.filter(item => { const text = ((item.selftext || '') + ' ' + (item.title || '')).toLowerCase(); return (text.includes('app') || text.includes('software') || text.includes('tech') || text.includes('computer') || text.includes('phone')) && (text.includes('problem') || text.includes('issue') || text.includes('struggle') || text.includes('can\\'t') || text.includes('difficult') || text.includes('wish there was') || text.includes('need something')); }).length }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -150,
+        500
+      ],
+      "id": "enhanced-analysis",
+      "name": "Enhanced Multi-Source Analysis"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4.1-MINI"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=You are an elite business opportunity analyzer with access to COMPREHENSIVE Reddit data across 5 different search dimensions. Your task is to identify HIGHLY VALIDATED business opportunities based on multi-source Reddit analysis.\n\n🔍 COMPREHENSIVE DATA ANALYSIS:\n**Topic**: {{ $('Webhook Trigger').item.json.Topic }}\n\n📊 **DATA SOURCES OVERVIEW**:\n- Problem Posts: {{ $json.problemPosts.length }} posts\n- Failed Solution Posts: {{ $json.failedSolutionPosts.length }} posts  \n- Wish List Posts: {{ $json.wishListPosts.length }} posts\n- Payment Willingness Posts: {{ $json.paymentWillingnessPosts.length }} posts\n- Negative Review Posts: {{ $json.negativeReviewPosts.length }} posts\n- **Total Posts Analyzed**: {{ $json.totalPosts }}\n- **Unique Communities**: {{ $json.uniqueSubreddits }} subreddits\n- **Total Engagement**: {{ $json.totalUpvotes }} upvotes, {{ $json.totalComments }} comments\n\n🎯 **VALIDATION METRICS**:\n- Problem Validation Score: {{ $json.problemValidationScore }}%\n- Market Demand Score: {{ $json.marketDemandScore }}%\n\n🔥 **PAIN POINT BREAKDOWN**:\n- Sleep Problems: {{ $json.sleepProblems }} posts\n- Productivity Issues: {{ $json.productivityProblems }} posts  \n- Money/Financial Problems: {{ $json.moneyProblems }} posts\n- Relationship/Social Issues: {{ $json.relationshipProblems }} posts\n- Health/Fitness Problems: {{ $json.healthProblems }} posts\n- Work/Career Issues: {{ $json.workProblems }} posts\n- Technology Gaps: {{ $json.techProblems }} posts\n\n📝 **MULTI-DIMENSIONAL ANALYSIS**:\n\n**1. PROBLEM VALIDATION** ({{ $json.problemPosts.length }} posts):\nAnalyze: {{ JSON.stringify($json.problemPosts.slice(0, 10)) }}\n\n**2. FAILED SOLUTION ANALYSIS** ({{ $json.failedSolutionPosts.length }} posts):\nAnalyze: {{ JSON.stringify($json.failedSolutionPosts.slice(0, 10)) }}\n\n**3. EXPLICIT DEMAND SIGNALS** ({{ $json.wishListPosts.length }} posts):\nAnalyze: {{ JSON.stringify($json.wishListPosts.slice(0, 10)) }}\n\n**4. PAYMENT VALIDATION** ({{ $json.paymentWillingnessPosts.length }} posts):\nAnalyze: {{ JSON.stringify($json.paymentWillingnessPosts.slice(0, 10)) }}\n\n**5. COMPETITIVE GAP ANALYSIS** ({{ $json.negativeReviewPosts.length }} posts):\nAnalyze: {{ JSON.stringify($json.negativeReviewPosts.slice(0, 10)) }}\n\n💡 **ENHANCED ANALYSIS METHODOLOGY**:\n1. **Cross-Reference Validation**: Find problems mentioned across multiple search types\n2. **Solution Gap Identification**: Identify what existing solutions are missing\n3. **Payment Validation**: Prioritize problems people explicitly say they'd pay for\n4. **Community Breadth**: Focus on problems spanning multiple subreddits\n5. **Engagement Quality**: Prioritize high-engagement posts with detailed descriptions\n\n🚀 **BUSINESS IDEA CRITERIA** (ENHANCED):\n- Must appear across at least 2 different search dimensions\n- Should have explicit payment willingness signals\n- Must have clear competitive gaps from failed solutions\n- Should span multiple subreddit communities\n- Must have high engagement (comments + upvotes)\n\nReturn ONLY a JSON array of 3-5 HIGHLY VALIDATED business ideas:\n[\n  {\n    \"title\": \"Specific Business Idea Name\",\n    \"description\": \"2-3 sentences explaining what it does and how it works\",\n    \"category\": \"SaaS/App/Service/E-commerce/Platform\",\n    \"painPointCategory\": \"sleep/productivity/money/relationship/health/work/tech\",\n    \"specificProblem\": \"Exact problem this solves from the posts\",\n    \"targetAudience\": \"Who would use this\",\n    \"mvpDescription\": \"Simple first version to test the market\",\n    \"monetization\": \"How it makes money\",\n    \"validationEvidence\": {\n      \"problemMentions\": \"Number of posts mentioning this problem\",\n      \"failedSolutions\": \"Existing solutions that don't work\",\n      \"paymentSignals\": \"Evidence people would pay for this\",\n      \"communitySpread\": \"Subreddits where this problem appears\",\n      \"engagementLevel\": \"Total upvotes/comments for related posts\"\n    },\n    \"competitiveAdvantage\": \"Why this would succeed where others failed\",\n    \"estimatedDemand\": \"high/medium/low\",\n    \"buildComplexity\": \"simple/medium/complex\",\n    \"confidenceScore\": \"1-100 based on multi-source validation\"\n  }\n]\n\n🚨 **CRITICAL REQUIREMENTS**:\n- Only suggest ideas validated across MULTIPLE search dimensions\n- Include specific quotes from posts as evidence\n- Focus on problems with both explicit demand AND payment willingness\n- Prioritize ideas where existing solutions clearly fail\n- Must span at least 2 different subreddit communities"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        150,
+        500
+      ],
+      "id": "enhanced-ai-analyzer",
+      "name": "Enhanced AI Business Analyzer",
+      "credentials": {
+        "openAiApi": {
+          "id": "ZMZuSK1Z9O4REjaX",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4.1-MINI"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Create a COMPREHENSIVE business opportunity report based on the enhanced multi-source Reddit analysis: {{ $json.message.content }}\n\nStructure the report with:\n\n# 🎯 Reddit-Validated Business Opportunities Report\n## Topic: {{ $('Webhook Trigger').item.json.Topic }}\n\n## 📊 Executive Summary\n- **Total Posts Analyzed**: {{ $('Enhanced Multi-Source Analysis').item.json.totalPosts }} across {{ $('Enhanced Multi-Source Analysis').item.json.uniqueSubreddits }} communities\n- **Multi-Source Validation**: 5 different search dimensions\n- **Problem Validation Score**: {{ $('Enhanced Multi-Source Analysis').item.json.problemValidationScore }}%\n- **Market Demand Score**: {{ $('Enhanced Multi-Source Analysis').item.json.marketDemandScore }}%\n- **Total Engagement**: {{ $('Enhanced Multi-Source Analysis').item.json.totalUpvotes }} upvotes, {{ $('Enhanced Multi-Source Analysis').item.json.totalComments }} comments\n\n## 🔍 Data Source Breakdown\n- **Problem Identification**: {{ $('Enhanced Multi-Source Analysis').item.json.problemPosts.length }} posts revealing core pain points\n- **Failed Solution Analysis**: {{ $('Enhanced Multi-Source Analysis').item.json.failedSolutionPosts.length }} posts about what doesn't work\n- **Explicit Demand Signals**: {{ $('Enhanced Multi-Source Analysis').item.json.wishListPosts.length }} posts with \"wish there was\" statements\n- **Payment Willingness**: {{ $('Enhanced Multi-Source Analysis').item.json.paymentWillingnessPosts.length }} posts indicating monetary motivation\n- **Competitive Gaps**: {{ $('Enhanced Multi-Source Analysis').item.json.negativeReviewPosts.length }} posts criticizing existing solutions\n\n## 💡 Top Validated Business Ideas\nFor each idea include:\n- **Multi-Source Validation**: Evidence from all 5 search dimensions\n- **Problem Quotes**: Specific Reddit posts that validate this problem\n- **Failed Solution Analysis**: What exists and why it's inadequate\n- **Payment Validation**: Evidence of willingness to pay\n- **Community Spread**: Which subreddits discuss this problem\n- **Business Model**: Detailed monetization strategy\n- **MVP Strategy**: Phase 1 implementation plan\n- **Competitive Advantage**: Why this succeeds where others failed\n- **Success Metrics**: KPIs to track validation\n\n## 🎯 Implementation Roadmap\n- **Immediate Next Steps**: 5 concrete actions to take this week\n- **MVP Timeline**: 30/60/90-day milestones\n- **Budget Requirements**: Estimated costs for validation phase\n- **Risk Mitigation**: Key risks and how to address them\n- **Validation Tests**: How to prove/disprove each idea quickly\n\n## 📈 Market Intelligence\n- **Community Analysis**: Key subreddits and their dynamics\n- **Engagement Patterns**: What types of posts get most traction\n- **Language Analysis**: How people describe their problems\n- **Temporal Trends**: When these problems are discussed most\n\n## 🏆 Recommended Priority Order\nRank the ideas by:\n1. Multi-source validation strength\n2. Payment willingness signals\n3. Competitive gap size\n4. Implementation feasibility\n5. Market size indicators\n\nUse clear headings, bullet points, specific data points, and actionable language. Make it ready for immediate entrepreneurial action with specific next steps and validation methods."
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        500,
+        500
+      ],
+      "id": "comprehensive-report-generator",
+      "name": "Comprehensive Report Generator",
+      "credentials": {
+        "openAiApi": {
+          "id": "ZMZuSK1Z9O4REjaX",
+          "name": "OpenAi account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Reddit Search - Problems",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Reddit Search - Failed Solutions",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Reddit Search - Wish List",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Reddit Search - Payment Willingness",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Reddit Search - Negative Reviews",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reddit Search - Problems": {
+      "main": [
+        [
+          {
+            "node": "Format Problems Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reddit Search - Failed Solutions": {
+      "main": [
+        [
+          {
+            "node": "Format Failed Solutions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reddit Search - Wish List": {
+      "main": [
+        [
+          {
+            "node": "Format Wish List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reddit Search - Payment Willingness": {
+      "main": [
+        [
+          {
+            "node": "Format Payment Willingness",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reddit Search - Negative Reviews": {
+      "main": [
+        [
+          {
+            "node": "Format Negative Reviews",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Problems Data": {
+      "main": [
+        [
+          {
+            "node": "Aggregate All Reddit Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Failed Solutions": {
+      "main": [
+        [
+          {
+            "node": "Aggregate All Reddit Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Wish List": {
+      "main": [
+        [
+          {
+            "node": "Aggregate All Reddit Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Payment Willingness": {
+      "main": [
+        [
+          {
+            "node": "Aggregate All Reddit Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Negative Reviews": {
+      "main": [
+        [
+          {
+            "node": "Aggregate All Reddit Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate All Reddit Data": {
+      "main": [
+        [
+          {
+            "node": "Enhanced Multi-Source Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enhanced Multi-Source Analysis": {
+      "main": [
+        [
+          {
+            "node": "Enhanced AI Business Analyzer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enhanced AI Business Analyzer": {
+      "main": [
+        [
+          {
+            "node": "Comprehensive Report Generator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "enhanced-v1",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "enhanced-instance"
+  },
+  "id": "enhanced-workflow",
+  "tags": ["business-validation", "reddit-analysis", "startup-ideas"]
+} 

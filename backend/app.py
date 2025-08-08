@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Depends, Request, WebSocket, WebSocketDisconnect, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -13,8 +13,21 @@ import os
 from pathlib import Path
 
 # Import models and database
-from models import Base, User, Trade, MT5Connection, SessionLocal, engine, hash_password
+from models import Base, User, Trade, MT5Connection, SessionLocal, engine, hash_password, verify_password
 from websocket_manager import ConnectionManager
+
+# Import for password validation
+from pydantic import BaseModel
+
+# Request models for authentication
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class RegisterRequest(BaseModel):
+    email: str
+    username: str
+    password: str
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -49,6 +62,8 @@ def get_db():
     finally:
         db.close()
 
+# ===== SESSION MANAGEMENT (FOR EA ONLY) =====
+
 def get_session_id_from_request(request: Request) -> str:
     """Extract session ID from request headers or create new one"""
     session_id = request.headers.get("X-Session-ID")
@@ -56,9 +71,8 @@ def get_session_id_from_request(request: Request) -> str:
         session_id = str(uuid.uuid4())
     return session_id
 
-def get_or_create_session_user(session_id: str, db: Session) -> User:
-    """Get or create a user for this session"""
-    # First check in-memory cache
+def get_or_create_session_user_for_ea(session_id: str, db: Session) -> User:
+    """Create session user ONLY for EA connections - not for web auth"""
     if session_id in user_sessions:
         user_id = user_sessions[session_id]
         user = db.query(User).filter(User.id == user_id).first()
@@ -66,7 +80,6 @@ def get_or_create_session_user(session_id: str, db: Session) -> User:
             return user
     
     # Check if user exists in database with this session pattern
-    # Look for existing user with session-based email pattern
     existing_user = db.query(User).filter(
         User.email.like(f"user_{session_id[:8]}_%@copyarena.com")
     ).first()
@@ -75,10 +88,10 @@ def get_or_create_session_user(session_id: str, db: Session) -> User:
         # Found existing user, cache the session
         user_sessions[session_id] = existing_user.id
         user_api_keys[existing_user.api_key] = existing_user.id
-        logger.info(f"Retrieved existing user {existing_user.id} for session {session_id[:8]}")
+        logger.info(f"Retrieved existing EA user {existing_user.id} for session {session_id[:8]}")
         return existing_user
     
-    # Create a new user for this session with timestamp to ensure uniqueness
+    # Create a new user for EA session with timestamp to ensure uniqueness
     import time
     timestamp = str(int(time.time()))[-6:]  # Last 6 digits of timestamp
     
@@ -110,38 +123,204 @@ def get_or_create_session_user(session_id: str, db: Session) -> User:
     user_sessions[session_id] = new_user.id
     user_api_keys[final_api_key] = new_user.id
     
-    logger.info(f"Created new user {new_user.id} (session: {session_id[:8]}) with API key: {final_api_key[:20]}...")
+    logger.info(f"Created new EA user {new_user.id} (session: {session_id[:8]}) with API key: {final_api_key[:20]}...")
     
     return new_user
 
-def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
-    """Get current user from session"""
-    session_id = get_session_id_from_request(request)
-    return get_or_create_session_user(session_id, db)
+def get_current_user_from_token(authorization: str, db: Session) -> User:
+    """Get user from JWT token or session token"""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="No valid token provided")
+    
+    token = authorization.replace("Bearer ", "")
+    
+    # Check if it's a session token format
+    if token.startswith("session_"):
+        user_id = token.replace("session_", "")
+        try:
+            user = db.query(User).filter(User.id == int(user_id)).first()
+            if user:
+                return user
+        except:
+            pass
+    
+    # If no valid token found
+    raise HTTPException(status_code=401, detail="Invalid token")
 
 def get_user_by_api_key(api_key: str, db: Session) -> User:
-    """Get user by API key"""
+    """Get user by API key for EA authentication"""
+    if not api_key:
+        return None
+    
+    # First check the in-memory cache
     if api_key in user_api_keys:
         user_id = user_api_keys[api_key]
-        return db.query(User).filter(User.id == user_id).first()
+        user = db.query(User).filter(User.id == user_id).first()
+        if user:
+            return user
     
-    # Fallback: search in database
+    # If not in cache, query database
     user = db.query(User).filter(User.api_key == api_key).first()
     if user:
+        # Cache the mapping
         user_api_keys[api_key] = user.id
-    return user
+        return user
+    
+    return None
 
-# ===== UTILITY ENDPOINTS =====
+def get_current_user(authorization: str = Header(None), db: Session = Depends(get_db)) -> User:
+    """Get current user - requires proper authentication"""
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Authorization header required")
+    
+    return get_current_user_from_token(authorization, db)
 
-@app.get("/")
-async def root():
-    """Root endpoint for connectivity testing"""
-    return {"status": "ok", "service": "CopyArena API", "version": "1.0.0"}
+# ===== AUTHENTICATION ENDPOINTS =====
 
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+@app.post("/api/auth/register")
+async def register(request: RegisterRequest, db: Session = Depends(get_db)):
+    """Register a new user with email and password"""
+    try:
+        # Check if user already exists
+        existing_user = db.query(User).filter(User.email == request.email).first()
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Email already registered")
+        
+        # Check if username is taken
+        existing_username = db.query(User).filter(User.username == request.username).first()
+        if existing_username:
+            raise HTTPException(status_code=400, detail="Username already taken")
+        
+        # Validate password length
+        if len(request.password) < 6:
+            raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+        
+        # Create new user
+        hashed_password = hash_password(request.password)
+        api_key = f"ca_user_{uuid.uuid4().hex[:16]}"
+        
+        new_user = User(
+            email=request.email,
+            username=request.username,
+            hashed_password=hashed_password,
+            api_key=api_key,
+            subscription_plan="free",
+            credits=100,  # Welcome credits
+            xp_points=0,
+            level=1,
+            is_online=True
+        )
+        
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+        
+        # Update API key with user ID
+        final_api_key = f"ca_{new_user.id}_{uuid.uuid4().hex[:12]}"
+        new_user.api_key = final_api_key
+        db.commit()
+        db.refresh(new_user)
+        
+        logger.info(f"New user registered: {new_user.email} (ID: {new_user.id})")
+        
+        return {
+            "user": {
+                "id": new_user.id,
+                "username": new_user.username,
+                "email": new_user.email,
+                "api_key": new_user.api_key,
+                "subscription_plan": new_user.subscription_plan,
+                "credits": new_user.credits,
+                "xp_points": new_user.xp_points,
+                "level": new_user.level,
+                "is_online": new_user.is_online
+            },
+            "token": f"session_{new_user.id}",
+            "message": "Registration successful"
+        }
+        
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Registration error: {e}")
+        raise HTTPException(status_code=500, detail="Registration failed")
+
+@app.post("/api/auth/login")
+async def login(request: LoginRequest, db: Session = Depends(get_db)):
+    """Login with email and password"""
+    try:
+        # Find user by email
+        user = db.query(User).filter(User.email == request.email).first()
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        
+        # Verify password
+        if not verify_password(request.password, user.hashed_password):
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        
+        # Update user status
+        user.is_online = True
+        user.last_seen = datetime.utcnow()
+        db.commit()
+        
+        logger.info(f"User logged in: {user.email} (ID: {user.id})")
+        
+        return {
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "api_key": user.api_key,
+                "subscription_plan": user.subscription_plan,
+                "credits": user.credits,
+                "xp_points": user.xp_points,
+                "level": user.level,
+                "is_online": user.is_online
+            },
+            "token": f"session_{user.id}",
+            "message": "Login successful"
+        }
+        
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Login error: {e}")
+        raise HTTPException(status_code=500, detail="Login failed")
+
+@app.post("/api/auth/logout")
+async def logout(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Logout current user"""
+    user.is_online = False
+    db.commit()
+    return {"message": "Logged out successfully"}
+
+# ===== SESSION ENDPOINTS (FOR EA ONLY) =====
+
+@app.get("/api/auth/session")
+async def get_session(request: Request, db: Session = Depends(get_db)):
+    """Get session info - ONLY for EA connections"""
+    session_id = get_session_id_from_request(request)
+    user = get_or_create_session_user_for_ea(session_id, db)
+    return {
+        "session_id": session_id,
+        "user_id": user.id,
+        "username": user.username,
+        "api_key": user.api_key,
+        "message": "Session valid"
+    }
+
+@app.post("/api/auth/session")
+async def create_session(request: Request, db: Session = Depends(get_db)):
+    """Create/get session user info - ONLY for EA connections"""
+    session_id = get_session_id_from_request(request)
+    user = get_or_create_session_user_for_ea(session_id, db)
+    return {
+        "session_id": session_id,
+        "user_id": user.id,
+        "username": user.username,
+        "api_key": user.api_key,
+        "message": "Session active"
+    }
 
 # === EA DATA ENDPOINTS ===
 
@@ -238,67 +417,118 @@ async def handle_account_update(user: User, data: dict, db: Session):
     # For now, we'll store in MT5Connection
     connection = db.query(MT5Connection).filter(MT5Connection.user_id == user.id).first()
     if connection:
+        # Store raw values from EA
         connection.account_balance = data.get("balance", 0)
         connection.account_equity = data.get("equity", 0)
         connection.account_margin = data.get("margin", 0)
         connection.account_free_margin = data.get("free_margin", 0)
-        connection.account_margin_level = data.get("margin_level", 0)
+        
+        # Fix margin level calculation - MT5 sends percentage already
+        margin_level = data.get("margin_level", 0)
+        # If margin is 0 or very small, margin level should be very high (or infinite)
+        account_margin = data.get("margin", 0)
+        if account_margin > 0:
+            # MT5 already calculates this correctly as percentage
+            connection.account_margin_level = margin_level
+        else:
+            # No margin used = infinite margin level, but cap at reasonable value
+            connection.account_margin_level = 999999.0
+        
+        connection.account_profit = data.get("profit", 0)
+        connection.account_currency = data.get("account_currency", "USD")
         connection.last_sync = datetime.utcnow()
         db.commit()
+        
+        # Log account update for debugging
+        logger.info(f"Account updated for user {user.id}: Balance={data.get('balance')}, "
+                   f"Equity={data.get('equity')}, Margin={data.get('margin')}, "
+                   f"Free Margin={data.get('free_margin')}, Margin Level={margin_level}%")
 
 async def handle_positions_update(user: User, positions: list, db: Session):
-    """Handle positions update from EA"""
-    # Get existing open trades for this user
-    existing_trades = db.query(Trade).filter(
-        Trade.user_id == user.id,
-        Trade.status == "open"
-    ).all()
+    """Handle positions update from EA - LIVE DATA PROCESSING"""
+    logger.info(f"🔄 Processing {len(positions)} positions for {user.username}")
     
-    existing_tickets = {trade.ticket for trade in existing_trades}
-    incoming_tickets = {pos["ticket"] for pos in positions}
+    if not positions:
+        logger.info("📭 No positions received - all trades may be closed")
+        return
     
-    # Close trades that are no longer in positions
-    for trade in existing_trades:
-        if trade.ticket not in incoming_tickets:
-            trade.status = "closed"
-            trade.close_time = datetime.utcnow()
+    # Process each position from EA
+    new_count = 0
+    updated_count = 0
     
-    # Update or create trades
     for pos in positions:
-        ticket = pos["ticket"]
-        existing_trade = db.query(Trade).filter(
-            Trade.user_id == user.id,
-            Trade.ticket == ticket
-        ).first()
-        
-        if existing_trade:
-            # Update existing trade
-            existing_trade.current_price = pos.get("current_price", 0)
-            existing_trade.unrealized_profit = pos.get("profit", 0)
-            existing_trade.swap = pos.get("swap", 0)
-            existing_trade.commission = pos.get("commission", 0)
-        else:
-            # Create new trade
-            new_trade = Trade(
-                user_id=user.id,
-                ticket=ticket,
-                symbol=pos.get("symbol", ""),
-                trade_type="buy" if pos.get("type") == 0 else "sell",
-                volume=pos.get("volume", 0),
-                open_price=pos.get("open_price", 0),
-                current_price=pos.get("current_price", 0),
-                stop_loss=pos.get("sl", 0),
-                take_profit=pos.get("tp", 0),
-                unrealized_profit=pos.get("profit", 0),
-                swap=pos.get("swap", 0),
-                commission=pos.get("commission", 0),
-                open_time=datetime.fromtimestamp(pos.get("open_time", 0)),
-                comment=pos.get("comment", ""),
-                status="open"
-            )
-            db.add(new_trade)
+        try:
+            ticket = str(pos.get("ticket", ""))
+            if not ticket:
+                continue
+                
+            # Extract position data
+            symbol = pos.get("symbol", "")
+            trade_type = "buy" if pos.get("type") == 0 else "sell"
+            volume = float(pos.get("volume", 0))
+            open_price = float(pos.get("open_price", 0))
+            current_price = float(pos.get("current_price", 0))
+            profit = float(pos.get("profit", 0))
+            swap = float(pos.get("swap", 0))
+            open_time = datetime.fromtimestamp(pos.get("open_time", 0)) if pos.get("open_time") else datetime.utcnow()
+            
+            # Find existing trade
+            existing_trade = db.query(Trade).filter(
+                Trade.user_id == user.id,
+                Trade.ticket == ticket
+            ).first()
+            
+            if existing_trade:
+                # Update existing trade - ENSURE IT'S OPEN
+                existing_trade.status = "open"  # 🔥 CRITICAL: Force open status
+                existing_trade.current_price = current_price
+                existing_trade.unrealized_profit = profit
+                existing_trade.realized_profit = 0 if existing_trade.status != "closed" else existing_trade.realized_profit
+                existing_trade.swap = swap
+                existing_trade.close_time = None  # Clear close time for open trades
+                existing_trade.close_price = None  # Clear close price for open trades
+                updated_count += 1
+                logger.info(f"✅ Updated {ticket}: {symbol} {profit:.2f}")
+            else:
+                # Create NEW trade - ALWAYS OPEN
+                new_trade = Trade(
+                    user_id=user.id,
+                    ticket=ticket,
+                    symbol=symbol,
+                    trade_type=trade_type,
+                    volume=volume,
+                    open_price=open_price,
+                    current_price=current_price,
+                    stop_loss=float(pos.get("sl", 0)),
+                    take_profit=float(pos.get("tp", 0)),
+                    unrealized_profit=profit,
+                    realized_profit=0,
+                    swap=swap,
+                    commission=0,
+                    open_time=open_time,
+                    close_time=None,
+                    close_price=None,
+                    comment=pos.get("comment", ""),
+                    status="open"  # 🔥 CRITICAL: ALWAYS open for new positions
+                )
+                db.add(new_trade)
+                new_count += 1
+                logger.info(f"🆕 Created {ticket}: {symbol} {trade_type} {volume} lots P&L={profit:.2f}")
+                
+        except Exception as e:
+            logger.error(f"❌ Error processing position {pos}: {e}")
+            continue
     
+    # Commit all changes
     db.commit()
+    logger.info(f"🎯 LIVE UPDATE: {new_count} new, {updated_count} updated trades")
+    
+    # Send immediate WebSocket update for instant UI refresh
+    await manager.send_user_message({
+        "type": "positions_updated",
+        "data": {"new": new_count, "updated": updated_count},
+        "message": "Live trades updated"
+    }, user.id)
 
 async def handle_orders_update(user: User, orders: list, db: Session):
     """Handle pending orders update"""
@@ -340,69 +570,6 @@ async def handle_history_update(user: User, history: list, db: Session):
     db.commit()
 
 # === WEB APP ENDPOINTS ===
-
-@app.get("/api/auth/session")
-async def get_session(request: Request, user: User = Depends(get_current_user)):
-    """Get current session user info"""
-    session_id = get_session_id_from_request(request)
-    return {
-        "session_id": session_id,
-        "user_id": user.id,
-        "username": user.username,
-        "api_key": user.api_key,
-        "message": "Session valid"
-    }
-
-@app.post("/api/auth/session")
-async def create_session(request: Request, db: Session = Depends(get_db)):
-    """Create/get session user info"""
-    session_id = get_session_id_from_request(request)
-    user = get_current_user(request, db)
-    return {
-        "session_id": session_id,
-        "user_id": user.id,
-        "username": user.username,
-        "api_key": user.api_key,
-        "message": "Session active"
-    }
-
-@app.post("/api/auth/login")
-async def login(request: Request, db: Session = Depends(get_db)):
-    """Login endpoint - for session-based system, just return session user"""
-    user = get_current_user(request, db)
-    return {
-        "user": {
-            "id": user.id,
-            "username": user.username,
-            "email": user.email,
-            "api_key": user.api_key,
-            "subscription_plan": user.subscription_plan,
-            "credits": user.credits,
-            "xp_points": user.xp_points,
-            "level": user.level,
-            "is_online": user.is_online
-        },
-        "token": f"session_{user.id}"  # Simple session token
-    }
-
-@app.post("/api/auth/register")
-async def register(request: Request, db: Session = Depends(get_db)):
-    """Register endpoint - for session-based system, just return session user"""
-    user = get_current_user(request, db)
-    return {
-        "user": {
-            "id": user.id,
-            "username": user.username,
-            "email": user.email,
-            "api_key": user.api_key,
-            "subscription_plan": user.subscription_plan,
-            "credits": user.credits,
-            "xp_points": user.xp_points,
-            "level": user.level,
-            "is_online": user.is_online
-        },
-        "token": f"session_{user.id}"  # Simple session token
-    }
 
 @app.get("/api/trades")
 async def get_trades(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -468,13 +635,32 @@ async def get_account_stats(user: User = Depends(get_current_user), db: Session 
     ).count()
     win_rate = (winning_trades / closed_trades * 100) if closed_trades > 0 else 0
     
+    # Get account values - use real-time data from MT5 connection
+    balance = float(connection.account_balance) if connection and connection.account_balance else 0
+    equity = float(connection.account_equity) if connection and connection.account_equity else 0
+    margin = float(connection.account_margin) if connection and connection.account_margin else 0
+    free_margin = float(connection.account_free_margin) if connection and connection.account_free_margin else 0
+    margin_level = float(connection.account_margin_level) if connection and connection.account_margin_level else 0
+    
+    # Validate margin level - should be reasonable percentage
+    if margin > 0:
+        # Calculate margin level as (Equity / Margin) * 100
+        calculated_margin_level = (equity / margin) * 100
+        # Use calculated value if stored value seems wrong
+        if margin_level > 100000 or margin_level < 0:
+            margin_level = calculated_margin_level
+            logger.warning(f"Fixed invalid margin level from {connection.account_margin_level}% to {calculated_margin_level}%")
+    else:
+        # No margin used = infinite margin level
+        margin_level = 999999.0
+    
     return {
         "account": {
-            "balance": float(connection.account_balance) if connection and connection.account_balance else 0,
-            "equity": float(connection.account_equity) if connection and connection.account_equity else 0,
-            "margin": float(connection.account_margin) if connection and connection.account_margin else 0,
-            "free_margin": float(connection.account_free_margin) if connection and connection.account_free_margin else 0,
-            "margin_level": float(connection.account_margin_level) if connection and connection.account_margin_level else 0,
+            "balance": balance,
+            "equity": equity,
+            "margin": margin,
+            "free_margin": free_margin,
+            "margin_level": round(margin_level, 2),  # Round to 2 decimal places
             "currency": connection.account_currency if connection else "USD"
         },
         "trading": {
@@ -490,7 +676,7 @@ async def get_account_stats(user: User = Depends(get_current_user), db: Session 
 
 @app.get("/api/user/profile")
 async def get_user_profile(user: User = Depends(get_current_user)):
-    """Get user profile information"""
+    """Get user profile information - requires authentication"""
     return {
         "user": {
             "id": user.id,
@@ -539,50 +725,226 @@ async def download_ea(user: User = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail=f"EA file not found. Checked: {ea_path}")
 
 @app.get("/api/leaderboard")
-async def get_leaderboard(db: Session = Depends(get_db)):
-    """Get leaderboard data"""
-    # Mock leaderboard data for now
-    return {
-        "leaderboard": [
-            {
-                "id": 1,
-                "username": "ProTrader",
-                "total_profit": 15420.50,
-                "win_rate": 78.5,
-                "followers": 245,
-                "xp_points": 12500,
-                "level": 15
-            },
-            {
-                "id": 2,
-                "username": "FXMaster",
-                "total_profit": 12380.25,
-                "win_rate": 72.1,
-                "followers": 189,
-                "xp_points": 9800,
-                "level": 12
-            }
-        ]
-    }
+async def get_leaderboard(sort_by: str = "xp_points", db: Session = Depends(get_db)):
+    """Get leaderboard data from real users"""
+    try:
+        # Get real users from database, sorted by requested field
+        query = db.query(User).filter(User.is_online == True)
+        
+        if sort_by == "total_profit":
+            # Calculate total profit for each user and sort
+            from sqlalchemy import func, case
+            users_with_profit = db.query(
+                User,
+                func.coalesce(
+                    func.sum(case(
+                        (Trade.status == "open", Trade.unrealized_profit),
+                        else_=Trade.realized_profit
+                    )), 0
+                ).label("total_profit")
+            ).outerjoin(Trade, User.id == Trade.user_id)\
+             .group_by(User.id)\
+             .order_by(func.coalesce(
+                 func.sum(case(
+                     (Trade.status == "open", Trade.unrealized_profit),
+                     else_=Trade.realized_profit
+                 )), 0
+             ).desc())\
+             .limit(50).all()
+            
+            leaderboard_data = []
+            for user, total_profit in users_with_profit:
+                # Calculate additional stats
+                win_rate = 0
+                closed_trades = db.query(Trade).filter(
+                    Trade.user_id == user.id, 
+                    Trade.status == "closed"
+                ).count()
+                
+                if closed_trades > 0:
+                    winning_trades = db.query(Trade).filter(
+                        Trade.user_id == user.id,
+                        Trade.status == "closed",
+                        Trade.realized_profit > 0
+                    ).count()
+                    win_rate = (winning_trades / closed_trades * 100)
+                
+                leaderboard_data.append({
+                    "id": user.id,
+                    "username": user.username,
+                    "total_profit": float(total_profit) if total_profit else 0,
+                    "win_rate": round(win_rate, 1),
+                    "followers": 0,  # TODO: Implement follower system
+                    "xp_points": user.xp_points,
+                    "level": user.level,
+                    "subscription_plan": user.subscription_plan,
+                    "is_online": user.is_online
+                })
+        else:
+            # Sort by XP points, level, or other user fields
+            if sort_by == "xp_points":
+                query = query.order_by(User.xp_points.desc())
+            elif sort_by == "level":
+                query = query.order_by(User.level.desc())
+            else:
+                query = query.order_by(User.xp_points.desc())  # Default fallback
+            
+            users = query.limit(50).all()
+            
+            leaderboard_data = []
+            for user in users:
+                # Calculate total profit for each user
+                total_profit = db.query(Trade).filter(Trade.user_id == user.id).with_entities(
+                    func.sum(case(
+                        (Trade.status == "open", Trade.unrealized_profit),
+                        else_=Trade.realized_profit
+                    )).label("total_profit")
+                ).scalar() or 0
+                
+                # Calculate win rate
+                closed_trades = db.query(Trade).filter(
+                    Trade.user_id == user.id, 
+                    Trade.status == "closed"
+                ).count()
+                
+                win_rate = 0
+                if closed_trades > 0:
+                    winning_trades = db.query(Trade).filter(
+                        Trade.user_id == user.id,
+                        Trade.status == "closed",
+                        Trade.realized_profit > 0
+                    ).count()
+                    win_rate = (winning_trades / closed_trades * 100)
+                
+                leaderboard_data.append({
+                    "id": user.id,
+                    "username": user.username,
+                    "total_profit": float(total_profit),
+                    "win_rate": round(win_rate, 1),
+                    "followers": 0,  # TODO: Implement follower system
+                    "xp_points": user.xp_points,
+                    "level": user.level,
+                    "subscription_plan": user.subscription_plan,
+                    "is_online": user.is_online
+                })
+        
+        return {"leaderboard": leaderboard_data}
+        
+    except Exception as e:
+        logger.error(f"Error fetching leaderboard: {e}")
+        # Fallback to basic user list if complex queries fail
+        users = db.query(User).order_by(User.xp_points.desc()).limit(10).all()
+        return {
+            "leaderboard": [
+                {
+                    "id": user.id,
+                    "username": user.username,
+                    "total_profit": 0,
+                    "win_rate": 0,
+                    "followers": 0,
+                    "xp_points": user.xp_points,
+                    "level": user.level,
+                    "subscription_plan": user.subscription_plan,
+                    "is_online": user.is_online
+                }
+                for user in users
+            ]
+        }
 
 @app.get("/api/marketplace")
 async def get_marketplace(db: Session = Depends(get_db)):
-    """Get marketplace traders"""
-    # Mock marketplace data for now
-    return {
-        "traders": [
-            {
-                "id": 1,
-                "username": "SignalKing",
-                "description": "Expert in EUR/USD scalping",
-                "total_profit": 8500.75,
-                "win_rate": 82.3,
-                "followers": 156,
-                "risk_level": "Medium",
-                "subscription_fee": 29.99
-            }
-        ]
-    }
+    """Get marketplace traders from real users with trading activity"""
+    try:
+        # Get users who have active trading and good performance
+        from sqlalchemy import func, case
+        
+        # Find users with trades and calculate their stats
+        users_with_trades = db.query(
+            User,
+            func.count(Trade.id).label("total_trades"),
+            func.coalesce(
+                func.sum(case(
+                    (Trade.status == "open", Trade.unrealized_profit),
+                    else_=Trade.realized_profit
+                )), 0
+            ).label("total_profit")
+        ).join(Trade, User.id == Trade.user_id)\
+         .group_by(User.id)\
+         .having(func.count(Trade.id) > 0)\
+         .order_by(func.coalesce(
+             func.sum(case(
+                 (Trade.status == "open", Trade.unrealized_profit),
+                 else_=Trade.realized_profit
+             )), 0
+         ).desc())\
+         .limit(20).all()
+        
+        marketplace_data = []
+        for user, total_trades, total_profit in users_with_trades:
+            # Calculate win rate
+            closed_trades = db.query(Trade).filter(
+                Trade.user_id == user.id, 
+                Trade.status == "closed"
+            ).count()
+            
+            win_rate = 0
+            if closed_trades > 0:
+                winning_trades = db.query(Trade).filter(
+                    Trade.user_id == user.id,
+                    Trade.status == "closed",
+                    Trade.realized_profit > 0
+                ).count()
+                win_rate = (winning_trades / closed_trades * 100)
+            
+            # Determine risk level based on trade volume and performance
+            risk_level = "Low"
+            if win_rate > 70:
+                risk_level = "Low"
+            elif win_rate > 50:
+                risk_level = "Medium"
+            else:
+                risk_level = "High"
+            
+            marketplace_data.append({
+                "id": user.id,
+                "username": user.username,
+                "description": f"Active trader with {total_trades} trades",
+                "total_profit": float(total_profit) if total_profit else 0,
+                "win_rate": round(win_rate, 1),
+                "followers": 0,  # TODO: Implement follower system
+                "risk_level": risk_level,
+                "subscription_fee": 0,  # Free for now
+                "level": user.level,
+                "xp_points": user.xp_points,
+                "is_online": user.is_online,
+                "subscription_plan": user.subscription_plan
+            })
+        
+        return {"traders": marketplace_data}
+        
+    except Exception as e:
+        logger.error(f"Error fetching marketplace: {e}")
+        # Fallback to simple user list
+        users = db.query(User).filter(User.is_online == True).limit(5).all()
+        return {
+            "traders": [
+                {
+                    "id": user.id,
+                    "username": user.username,
+                    "description": f"Level {user.level} trader",
+                    "total_profit": 0,
+                    "win_rate": 0,
+                    "followers": 0,
+                    "risk_level": "Medium",
+                    "subscription_fee": 0,
+                    "level": user.level,
+                    "xp_points": user.xp_points,
+                    "is_online": user.is_online,
+                    "subscription_plan": user.subscription_plan
+                }
+                for user in users
+            ]
+        }
 
 # === WEBSOCKET ===
 
