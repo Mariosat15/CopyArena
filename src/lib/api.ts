@@ -1,11 +1,13 @@
 import axios from 'axios'
 
 // Configure API base URL based on environment
-const isProduction = window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
+const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+const isNetworkAccess = window.location.hostname.startsWith('192.168.') || window.location.hostname.startsWith('10.') || window.location.hostname.startsWith('172.')
+const isProduction = !isLocalhost && !isNetworkAccess
 
 const API_BASE_URL = isProduction 
   ? `${window.location.protocol}//${window.location.host}`
-  : 'http://127.0.0.1:8002'
+  : `http://${window.location.hostname}:8002`
 
 // Create axios instance with base configuration
 export const api = axios.create({

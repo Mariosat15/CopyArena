@@ -12,9 +12,11 @@ export const useWebSocket = (userId?: number) => {
     if (!userId) return
 
     // Create native WebSocket connection
-    const isProduction = window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
+    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    const isNetworkAccess = window.location.hostname.startsWith('192.168.') || window.location.hostname.startsWith('10.') || window.location.hostname.startsWith('172.')
+    const isProduction = !isLocalhost && !isNetworkAccess
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsHost = isProduction ? window.location.host : '127.0.0.1:8002'
+    const wsHost = isProduction ? window.location.host : `${window.location.hostname}:8002`
     const wsUrl = `${wsProtocol}//${wsHost}/ws/user/${userId}`
     const socket = new WebSocket(wsUrl)
 

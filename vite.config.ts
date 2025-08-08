@@ -14,6 +14,7 @@ export default defineConfig({
     allowedHosts: [
       'localhost',
       '127.0.0.1',
+      '192.168.0.100',
       'copyarena.onrender.com',
       '.onrender.com'
     ]
@@ -24,6 +25,7 @@ export default defineConfig({
     allowedHosts: [
       'localhost',
       '127.0.0.1',
+      '192.168.0.100',
       '0.0.0.0',
       'copyarena.onrender.com',
       '.onrender.com' // Allow all Render subdomains
