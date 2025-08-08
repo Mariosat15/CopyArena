@@ -50,10 +50,10 @@ export function Sidebar() {
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium truncate">{user.username || 'Loading...'}</p>
-              <div className="flex items-center space-x-2 mt-1">
-                <Badge variant="secondary">Level {user.level}</Badge>
-                <Badge variant="outline">{user.subscription_plan}</Badge>
-              </div>
+                              <div className="flex items-center space-x-2 mt-1">
+                  <Badge variant="secondary">Level {user.level ?? 1}</Badge>
+                  <Badge variant="outline">{user.subscription_plan ?? 'free'}</Badge>
+                </div>
             </div>
           </div>
           
@@ -61,11 +61,11 @@ export function Sidebar() {
           <div className="mt-4 grid grid-cols-2 gap-4 text-sm">
             <div>
               <p className="text-muted-foreground">XP</p>
-              <p className="font-semibold">{user.xp_points.toLocaleString()}</p>
+              <p className="font-semibold">{user.xp_points ? user.xp_points.toLocaleString() : '0'}</p>
             </div>
             <div>
               <p className="text-muted-foreground">Credits</p>
-              <p className="font-semibold">{user.credits}</p>
+              <p className="font-semibold">{user.credits ?? 0}</p>
             </div>
           </div>
         </div>
