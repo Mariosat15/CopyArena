@@ -45,55 +45,87 @@ class MT5AccountInfo:
     profit: float
 
 class MT5Bridge:
-    def __init__(self):
+    def __init__(self, user_id: int = None):
+        self.user_id = user_id
         self.connected = False
         self.account_info = None
         self.active_trades = {}
         self.last_update = None
+        self.login = None
+        self.password = None
+        self.server = None
+        self._connection_lock = asyncio.Lock()
         
     async def connect(self, login: int = None, password: str = None, server: str = None) -> bool:
-        """Connect to MT5 terminal"""
-        try:
-            # Initialize MT5 connection
-            if not mt5.initialize():
-                logger.error("Failed to initialize MT5")
-                return False
-            
-            # If credentials provided, login to specific account
-            if login and password and server:
-                if not mt5.login(login, password=password, server=server):
-                    logger.error(f"Failed to login to MT5 account {login}")
-                    mt5.shutdown()
+        """Connect to MT5 terminal with user isolation"""
+        async with self._connection_lock:
+            try:
+                # Store user credentials for reconnection
+                if login and password and server:
+                    self.login = login
+                    self.password = password
+                    self.server = server
+                
+                # Initialize MT5 connection
+                if not mt5.initialize():
+                    logger.error(f"User {self.user_id}: Failed to initialize MT5")
                     return False
-                logger.info(f"Successfully logged in to MT5 account {login}")
-            else:
-                # Try to connect to already logged in account
-                account_info = mt5.account_info()
-                if account_info is None:
-                    logger.warning("No account logged in MT5 terminal")
-                    # Don't return False here, keep connection for terminal status
+                
+                # If this user has credentials, ensure we're connected to their account
+                if self.login and self.password and self.server:
+                    # Check if we're already connected to this user's account
+                    current_account = mt5.account_info()
+                    if current_account and current_account.login == self.login:
+                        logger.info(f"User {self.user_id}: Already connected to correct MT5 account {self.login}")
+                    else:
+                        # Need to switch to this user's account
+                        logger.info(f"User {self.user_id}: Switching to MT5 account {self.login}")
+                        if not mt5.login(self.login, password=self.password, server=self.server):
+                            logger.error(f"User {self.user_id}: Failed to login to MT5 account {self.login}")
+                            mt5.shutdown()
+                            return False
+                        logger.info(f"User {self.user_id}: Successfully logged in to MT5 account {self.login}")
                 else:
-                    logger.info(f"Connected to existing MT5 account {account_info.login}")
-            
-            self.connected = True
-            self.account_info = self._get_account_info()
-            logger.info("MT5 Bridge connected successfully")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error connecting to MT5: {e}")
-            return False
+                    # Try to connect to already logged in account (fallback)
+                    account_info = mt5.account_info()
+                    if account_info is None:
+                        logger.warning(f"User {self.user_id}: No account logged in MT5 terminal")
+                        return False
+                    else:
+                        logger.info(f"User {self.user_id}: Connected to existing MT5 account {account_info.login}")
+                
+                self.connected = True
+                self.account_info = await self._get_account_info()
+                logger.info(f"User {self.user_id}: MT5 Bridge connected successfully")
+                return True
+                
+            except Exception as e:
+                logger.error(f"User {self.user_id}: Error connecting to MT5: {e}")
+                return False
     
+    async def _ensure_user_connection(self):
+        """Ensure we're connected to this user's specific account before any operation"""
+        if not self.connected:
+            return False
+            
+        if self.login and self.password and self.server:
+            current_account = mt5.account_info()
+            if not current_account or current_account.login != self.login:
+                logger.info(f"User {self.user_id}: Reconnecting to correct account {self.login}")
+                return await self.connect(self.login, self.password, self.server)
+        
+        return True
+
     def disconnect(self):
         """Disconnect from MT5"""
         if self.connected:
             mt5.shutdown()
             self.connected = False
-            logger.info("MT5 Bridge disconnected")
+            logger.info(f"User {self.user_id}: MT5 Bridge disconnected")
     
-    def _get_account_info(self) -> Optional[MT5AccountInfo]:
+    async def _get_account_info(self) -> Optional[MT5AccountInfo]:
         """Get account information"""
-        if not self.connected:
+        if not await self._ensure_user_connection():
             return None
             
         try:
@@ -243,8 +275,8 @@ class MT5Bridge:
     
     async def sync_trades_to_database(self, user_id: int, db_session=None):
         """Sync MT5 trades to database"""
-        if not self.connected:
-            logger.warning("MT5 not connected, cannot sync trades")
+        if not await self._ensure_user_connection():
+            logger.warning(f"User {user_id}: MT5 not connected correctly, cannot sync trades")
             return
         
         # Import session from models
@@ -441,7 +473,8 @@ class MT5Bridge:
     
     async def monitor_account(self, user_id: int, callback=None):
         """Monitor account for real-time updates"""
-        if not self.connected:
+        if not await self._ensure_user_connection():
+            logger.warning(f"User {user_id}: Cannot start monitoring, MT5 not connected correctly")
             return
         
         logger.info(f"Starting account monitoring for user {user_id}")
@@ -451,8 +484,13 @@ class MT5Bridge:
         
         while self.connected:
             try:
+                # Ensure we're still connected to the correct user account
+                if not await self._ensure_user_connection():
+                    logger.error(f"User {user_id}: Lost connection to correct MT5 account, stopping monitoring")
+                    break
+                
                 # Update account info
-                current_account_info = self._get_account_info()
+                current_account_info = await self._get_account_info()
                 
                 # Sync trades to database
                 await self.sync_trades_to_database(user_id)
@@ -540,7 +578,7 @@ user_mt5_bridges = {}  # user_id -> MT5Bridge instance
 def get_user_mt5_bridge(user_id: int) -> MT5Bridge:
     """Get or create MT5Bridge instance for a specific user"""
     if user_id not in user_mt5_bridges:
-        user_mt5_bridges[user_id] = MT5Bridge()
+        user_mt5_bridges[user_id] = MT5Bridge(user_id=user_id)
         logger.info(f"Created new MT5Bridge instance for user {user_id}")
     return user_mt5_bridges[user_id]
 

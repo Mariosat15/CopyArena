@@ -49,10 +49,12 @@ def get_or_create_session_user(session_id: str, db: Session) -> User:
         if user:
             return user
     
-    # Create a new user for this session
+    # Create a new user for this session with timestamp to ensure uniqueness
+    import time
+    timestamp = str(int(time.time()))[-6:]  # Last 6 digits of timestamp
     new_user = User(
-        email=f"user_{session_id[:8]}@copyarena.com",
-        username=f"Trader_{session_id[:8]}",
+        email=f"user_{session_id[:8]}_{timestamp}@copyarena.com",
+        username=f"Trader_{session_id[:8]}_{timestamp}",
         hashed_password=hash_password("temp_password"),
         subscription_plan="free",
         credits=0,
@@ -974,4 +976,4 @@ async def startup_event():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    uvicorn.run(app, host="0.0.0.0", port=8001) 
