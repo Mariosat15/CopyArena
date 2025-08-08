@@ -5,7 +5,7 @@ import { Input } from '../components/ui/input'
 import { Badge } from '../components/ui/badge'
 import { useToast } from '../hooks/use-toast'
 import { Activity, AlertCircle, CheckCircle, Settings, Wifi, WifiOff } from 'lucide-react'
-import axios from 'axios'
+import { api } from '../lib/api'
 
 interface MT5Status {
   connected: boolean
@@ -49,7 +49,7 @@ const MT5ConnectionPage: React.FC = () => {
 
   const loadMT5Status = async () => {
     try {
-      const response = await axios.get('/api/mt5/status')
+      const response = await api.get('/api/mt5/status')
       setStatus(response.data)
     } catch (error) {
       console.error('Error loading MT5 status:', error)
@@ -66,7 +66,7 @@ const MT5ConnectionPage: React.FC = () => {
     setIsConnecting(true)
 
     try {
-      const response = await axios.post('/api/mt5/connect', {
+      const response = await api.post('/api/mt5/connect', {
         login: parseInt(connectionForm.login),
         password: connectionForm.password,
         server: connectionForm.server
@@ -99,7 +99,7 @@ const MT5ConnectionPage: React.FC = () => {
     setIsSyncing(true)
 
     try {
-      const response = await axios.post('/api/mt5/sync')
+      const response = await api.post('/api/mt5/sync')
       
       toast({
         title: "Sync Started",
@@ -125,7 +125,7 @@ const MT5ConnectionPage: React.FC = () => {
     setIsDebugging(true)
 
     try {
-      const response = await axios.get('/api/mt5/debug')
+      const response = await api.get('/api/mt5/debug')
       setDebugInfo(response.data)
       
       toast({
@@ -149,7 +149,7 @@ const MT5ConnectionPage: React.FC = () => {
     setIsTestingTrades(true)
 
     try {
-      const response = await axios.get('/api/mt5/test-trades')
+      const response = await api.get('/api/mt5/test-trades')
       setTradeTestInfo(response.data)
       
       toast({
@@ -173,7 +173,7 @@ const MT5ConnectionPage: React.FC = () => {
     setIsCleaningUp(true)
 
     try {
-      const response = await axios.post('/api/mt5/cleanup')
+      const response = await api.post('/api/mt5/cleanup')
       
       toast({
         title: "Cleanup Completed! 🧹",

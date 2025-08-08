@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import axios from 'axios'
+import { api } from '../lib/api'
 
 export interface Trade {
   id: number
@@ -97,7 +97,7 @@ export const useTradingStore = create<TradingState>((set) => ({
 
   fetchTrades: async () => {
     try {
-      const response = await axios.get('/api/trades')
+      const response = await api.get('/api/trades')
       set({ trades: response.data })
     } catch (error) {
       console.error('Failed to fetch trades:', error)
@@ -106,7 +106,7 @@ export const useTradingStore = create<TradingState>((set) => ({
 
   fetchAccountStats: async () => {
     try {
-      const response = await axios.get('/api/account/stats')
+              const response = await api.get('/api/account/stats')
       set({ accountStats: response.data })
     } catch (error) {
       console.error('Failed to fetch account stats:', error)
@@ -116,7 +116,7 @@ export const useTradingStore = create<TradingState>((set) => ({
   fetchTraders: async (filters = {}) => {
     try {
       const params = new URLSearchParams(filters)
-      const response = await axios.get(`/api/marketplace/traders?${params}`)
+              const response = await api.get(`/api/marketplace/traders?${params}`)
       set({ traders: response.data })
     } catch (error) {
       console.error('Failed to fetch traders:', error)
@@ -125,7 +125,7 @@ export const useTradingStore = create<TradingState>((set) => ({
 
   fetchLeaderboard: async (sortBy = 'xp_points') => {
     try {
-      const response = await axios.get(`/api/leaderboard?sort_by=${sortBy}`)
+      const response = await api.get(`/api/leaderboard?sort_by=${sortBy}`)
       set({ leaderboard: response.data })
     } catch (error) {
       console.error('Failed to fetch leaderboard:', error)
@@ -134,7 +134,7 @@ export const useTradingStore = create<TradingState>((set) => ({
 
   followTrader: async (traderId: number, settings: Partial<Follow>) => {
     try {
-      await axios.post('/api/follow', {
+      await api.post('/api/follow', {
         trader_id: traderId,
         ...settings
       })
@@ -159,7 +159,7 @@ export const useTradingStore = create<TradingState>((set) => ({
 
   unfollowTrader: async (traderId: number) => {
     try {
-      await axios.delete(`/api/follow/${traderId}`)
+      await api.delete(`/api/follow/${traderId}`)
       
       set(state => ({
         follows: state.follows.filter(f => f.trader_id !== traderId)

@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import axios from 'axios'
+import { api } from '../lib/api'
 
 export interface User {
   id: number
@@ -35,24 +35,7 @@ interface AuthState {
   initializeAuth: () => void
 }
 
-// Setup axios interceptor for auth token
-axios.interceptors.request.use((config) => {
-  const token = useAuthStore.getState().token
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`
-  }
-  return config
-})
-
-axios.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      useAuthStore.getState().logout()
-    }
-    return Promise.reject(error)
-  }
-)
+// Auth token interceptor is handled in api.ts
 
 export const useAuthStore = create<AuthState>()(
   persist(
@@ -62,7 +45,7 @@ export const useAuthStore = create<AuthState>()(
 
       login: async (email: string, password: string) => {
         try {
-          const response = await axios.post('/api/auth/login', { email, password })
+          const response = await api.post('/api/auth/login', { email, password })
           const { token, user } = response.data
           
           set({ user, token })
@@ -73,7 +56,7 @@ export const useAuthStore = create<AuthState>()(
 
       register: async (email: string, username: string, password: string) => {
         try {
-          const response = await axios.post('/api/auth/register', { 
+          const response = await api.post('/api/auth/register', { 
             email, 
             username, 
             password 
@@ -102,7 +85,7 @@ export const useAuthStore = create<AuthState>()(
         const { token } = get()
         if (token) {
           // Fetch fresh user data
-          axios.get('/api/user/profile')
+          api.get('/api/user/profile')
             .then(response => {
               set({ user: response.data })
             })

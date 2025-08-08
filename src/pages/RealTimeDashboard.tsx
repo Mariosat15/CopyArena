@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { useToast } from '@/hooks/use-toast'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
+import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
+import { useToast } from '../hooks/use-toast'
 import { 
   TrendingUp, 
   TrendingDown, 
@@ -14,8 +14,8 @@ import {
   WifiOff,
   RefreshCw
 } from 'lucide-react'
-import { formatCurrency, formatPercentage } from '@/lib/utils'
-import axios from 'axios'
+import { formatCurrency, formatPercentage } from '../lib/utils'
+import { api } from '../lib/api'
 
 interface RealTimeData {
   trades: Array<{
@@ -66,9 +66,9 @@ const RealTimeDashboard: React.FC = () => {
       
       // Load all data in parallel
       const [tradesResponse, analyticsResponse, statusResponse] = await Promise.all([
-        axios.get('/api/trades/real-time'),
-        axios.get('/api/analytics/performance'),
-        axios.get('/api/mt5/status')
+        api.get('/api/trades/real-time'),
+        api.get('/api/analytics/performance'),
+        api.get('/api/mt5/status')
       ])
 
       setData({
