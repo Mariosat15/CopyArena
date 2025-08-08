@@ -56,7 +56,7 @@ try {
 
 # Push to GitHub
 Write-Host "[3/4] Pushing to GitHub repository..." -ForegroundColor Yellow
-Write-Host "Repository: https://github.com/Mariosat15/copyarena" -ForegroundColor Cyan
+Write-Host "Repository: https://github.com/Mariosat15/CopyArena" -ForegroundColor Cyan
 try {
     git push origin main
 } catch {
@@ -74,7 +74,7 @@ Write-Host "   ✅ PUSH SUCCESSFUL!" -ForegroundColor Green
 Write-Host "====================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "Your CopyArena project has been successfully pushed to:" -ForegroundColor Cyan
-Write-Host "https://github.com/Mariosat15/copyarena" -ForegroundColor Blue
+Write-Host "https://github.com/Mariosat15/CopyArena" -ForegroundColor Blue
 Write-Host ""
 Write-Host "Recent commits:" -ForegroundColor Cyan
 git log --oneline -5

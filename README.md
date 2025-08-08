@@ -103,7 +103,7 @@ Create a `.env` file in the project root with the following variables:
 
 ```env
 # Database
-DATABASE_URL=sqlite:///./copyarena.db
+DATABASE_URL=sqlite:///./name of the database
 
 # JWT
 JWT_SECRET=your-jwt-secret-key
