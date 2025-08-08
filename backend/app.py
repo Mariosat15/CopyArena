@@ -309,6 +309,44 @@ async def get_session(user: User = Depends(get_current_user)):
         }
     }
 
+@app.post("/api/auth/login")
+async def login(request: Request, db: Session = Depends(get_db)):
+    """Login endpoint - for session-based system, just return session user"""
+    user = get_current_user(request, db)
+    return {
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "api_key": user.api_key,
+            "subscription_plan": user.subscription_plan,
+            "credits": user.credits,
+            "xp_points": user.xp_points,
+            "level": user.level,
+            "is_online": user.is_online
+        },
+        "token": f"session_{user.id}"  # Simple session token
+    }
+
+@app.post("/api/auth/register")
+async def register(request: Request, db: Session = Depends(get_db)):
+    """Register endpoint - for session-based system, just return session user"""
+    user = get_current_user(request, db)
+    return {
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "api_key": user.api_key,
+            "subscription_plan": user.subscription_plan,
+            "credits": user.credits,
+            "xp_points": user.xp_points,
+            "level": user.level,
+            "is_online": user.is_online
+        },
+        "token": f"session_{user.id}"  # Simple session token
+    }
+
 @app.get("/api/trades")
 async def get_trades(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get user's trades"""
@@ -341,8 +379,9 @@ async def get_account_stats(user: User = Depends(get_current_user), db: Session 
     connection = db.query(MT5Connection).filter(MT5Connection.user_id == user.id).first()
     
     # Calculate total profit from trades
+    from sqlalchemy import func, case
     total_profit = db.query(Trade).filter(Trade.user_id == user.id).with_entities(
-        db.func.sum(db.case(
+        func.sum(case(
             (Trade.status == "open", Trade.unrealized_profit),
             else_=Trade.realized_profit
         )).label("total_profit")
@@ -371,6 +410,52 @@ async def download_ea(user: User = Depends(get_current_user)):
         )
     else:
         raise HTTPException(status_code=404, detail="EA file not found")
+
+@app.get("/api/leaderboard")
+async def get_leaderboard(db: Session = Depends(get_db)):
+    """Get leaderboard data"""
+    # Mock leaderboard data for now
+    return {
+        "leaderboard": [
+            {
+                "id": 1,
+                "username": "ProTrader",
+                "total_profit": 15420.50,
+                "win_rate": 78.5,
+                "followers": 245,
+                "xp_points": 12500,
+                "level": 15
+            },
+            {
+                "id": 2,
+                "username": "FXMaster",
+                "total_profit": 12380.25,
+                "win_rate": 72.1,
+                "followers": 189,
+                "xp_points": 9800,
+                "level": 12
+            }
+        ]
+    }
+
+@app.get("/api/marketplace")
+async def get_marketplace(db: Session = Depends(get_db)):
+    """Get marketplace traders"""
+    # Mock marketplace data for now
+    return {
+        "traders": [
+            {
+                "id": 1,
+                "username": "SignalKing",
+                "description": "Expert in EUR/USD scalping",
+                "total_profit": 8500.75,
+                "win_rate": 82.3,
+                "followers": 156,
+                "risk_level": "Medium",
+                "subscription_fee": 29.99
+            }
+        ]
+    }
 
 # === WEBSOCKET ===
 
