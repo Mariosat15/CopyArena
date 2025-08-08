@@ -31,6 +31,7 @@ class User(Base):
     avatar_url = Column(String, default="")
     is_online = Column(Boolean, default=False)
     last_seen = Column(DateTime, default=datetime.utcnow)
+    api_key = Column(String, unique=True, index=True)  # For Expert Advisor authentication
 
 class Trade(Base):
     __tablename__ = "trades"

@@ -1,9 +1,9 @@
 """
 CopyArena Backend API
 
-Production-ready trading platform with real MetaTrader5 integration.
-Designed for Windows cloud servers (DigitalOcean, Azure, AWS) with 
-full MT5 connectivity for live trading operations.
+Expert Advisor based trading platform with real MetaTrader5 integration.
+Users connect via MQL5 Expert Advisors for seamless real-time data sync.
+Can be deployed on any cloud platform (Render, Vercel, etc.)
 """
 
 from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, Request, Response, BackgroundTasks
@@ -22,7 +22,13 @@ import os
 from contextlib import asynccontextmanager
 import uuid
 
+# Import EA API router
+from ea_api import router as ea_router
+
 app = FastAPI(title="CopyArena API", version="1.0.0")
+
+# Include EA API router
+app.include_router(ea_router)
 
 logger = logging.getLogger(__name__)
 
