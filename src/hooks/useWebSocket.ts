@@ -127,6 +127,18 @@ export const useWebSocket = (userId?: number) => {
             }
             break
 
+          case 'all_trades_closed':
+            console.log('🔒 All trades closed:', data.data)
+            // Clear live positions and refresh data
+            useTradingStore.getState().setLivePositions([])
+            useTradingStore.getState().fetchTrades()
+            useTradingStore.getState().fetchAccountStats()
+            toast({
+              title: "All Trades Closed! 🔒",
+              description: `${data.data.closed} trade(s) were closed`,
+            })
+            break
+
           case 'orders_update':
             console.log('Orders update:', data.data)
             // Refresh account stats when orders change

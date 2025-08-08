@@ -85,10 +85,16 @@ export function DashboardPage() {
 
   if (!user) return null
 
-  // Use account stats if available, fallback to trade calculations
+  // Calculate live profits from EA data FIRST, then fallback to database
+  const liveFloatingProfit = livePositions.length > 0 
+    ? livePositions.reduce((sum, pos) => sum + (pos.profit || 0), 0)
+    : 0 // Zero when no live positions
+
   const totalProfit = accountStats?.trading.total_profit ?? trades.reduce((sum, trade) => sum + trade.profit, 0)
   const historicalProfit = accountStats?.trading.historical_profit ?? trades.filter(t => !t.is_open).reduce((sum, trade) => sum + trade.profit, 0)
-  const floatingProfit = accountStats?.trading.floating_profit ?? trades.filter(t => t.is_open).reduce((sum, trade) => sum + trade.profit, 0)
+  const floatingProfit = livePositions.length > 0 
+    ? liveFloatingProfit 
+    : 0 // Zero when no live positions
   const winRate = accountStats?.trading.win_rate ?? (trades.length > 0 ? (trades.filter(trade => trade.profit > 0).length / trades.length) * 100 : 0)
   // const progressToNextLevel = getProgressToNextLevel(user.xp_points, user.level) // TODO: Use for level progress
 
@@ -154,11 +160,11 @@ export function DashboardPage() {
             <Calculator className={`h-4 w-4 ${(accountStats?.account.margin_level ?? 0) <= 150 ? 'text-red-500' : 'text-muted-foreground'}`} />
           </CardHeader>
           <CardContent>
-            <div className={`text-2xl font-bold ${(accountStats?.account.margin_level ?? 0) <= 150 ? 'text-red-600' : ''}`}>
-              {formatCurrency(accountStats?.account.free_margin ?? 0)}
+            <div className={`text-2xl font-bold ${(liveAccountStats?.margin_level ?? accountStats?.account.margin_level ?? 0) <= 150 ? 'text-red-600' : ''}`}>
+              {formatCurrency(liveAccountStats?.free_margin ?? accountStats?.account.free_margin ?? 0)}
             </div>
-            <p className={`text-xs ${(accountStats?.account.margin_level ?? 0) <= 150 ? 'text-red-500' : 'text-muted-foreground'}`}>
-              {(accountStats?.account.margin_level ?? 0) <= 150 ? 'LOW FREE MARGIN!' : 'Available for Trading'}
+            <p className={`text-xs ${(liveAccountStats?.margin_level ?? accountStats?.account.margin_level ?? 0) <= 150 ? 'text-red-500' : 'text-muted-foreground'}`}>
+              {liveAccountStats ? '🚀 Live Free Margin' : ((liveAccountStats?.margin_level ?? accountStats?.account.margin_level ?? 0) <= 150 ? 'LOW FREE MARGIN!' : 'Available for Trading')}
             </p>
           </CardContent>
         </Card>
@@ -169,11 +175,11 @@ export function DashboardPage() {
             <Target className={`h-4 w-4 ${(accountStats?.account.margin_level ?? 0) <= 150 ? 'text-red-500' : 'text-muted-foreground'}`} />
           </CardHeader>
           <CardContent>
-            <div className={`text-2xl font-bold ${(accountStats?.account.margin_level ?? 0) <= 150 ? 'text-red-600' : ''}`}>
-              {accountStats?.account.margin_level.toFixed(1) ?? '0.0'}%
+            <div className={`text-2xl font-bold ${(liveAccountStats?.margin_level ?? accountStats?.account.margin_level ?? 0) <= 150 ? 'text-red-600' : ''}`}>
+              {(liveAccountStats?.margin_level ?? accountStats?.account.margin_level ?? 0).toFixed(1)}%
             </div>
-            <p className={`text-xs ${(accountStats?.account.margin_level ?? 0) <= 150 ? 'text-red-500' : 'text-muted-foreground'}`}>
-              {(accountStats?.account.margin_level ?? 0) <= 150 ? 'MARGIN WARNING!' : 'Current Margin Level'}
+            <p className={`text-xs ${(liveAccountStats?.margin_level ?? accountStats?.account.margin_level ?? 0) <= 150 ? 'text-red-500' : 'text-muted-foreground'}`}>
+              {liveAccountStats ? '🚀 Live Margin Level' : ((liveAccountStats?.margin_level ?? accountStats?.account.margin_level ?? 0) <= 150 ? 'MARGIN WARNING!' : 'Current Margin Level')}
             </p>
           </CardContent>
         </Card>
@@ -184,14 +190,14 @@ export function DashboardPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Unrealized P&L</CardTitle>
-            <TrendingUp className="h-4 w-4 text-muted-foreground" />
+            <TrendingUp className={`h-4 w-4 ${liveFloatingProfit !== null ? 'text-green-500' : 'text-muted-foreground'}`} />
           </CardHeader>
           <CardContent>
             <div className={`text-2xl font-bold ${floatingProfit >= 0 ? 'profit-text' : 'loss-text'}`}>
               {formatCurrency(floatingProfit)}
             </div>
             <p className="text-xs text-muted-foreground">
-              From open positions
+              {livePositions.length > 0 ? '🚀 Live from EA' : 'No open positions'}
             </p>
           </CardContent>
         </Card>
@@ -246,10 +252,10 @@ export function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-green-600">
-              {livePositions.length > 0 ? livePositions.length : (accountStats?.trading.open_trades ?? trades.filter(t => t.is_open).length)}
+              {livePositions.length}
             </div>
             <p className="text-xs text-muted-foreground">
-              {livePositions.length > 0 ? 'Live from EA' : 'From database'}
+              {livePositions.length > 0 ? 'Live from EA' : 'No open positions'}
             </p>
           </CardContent>
         </Card>

@@ -449,7 +449,32 @@ async def handle_positions_update(user: User, positions: list, db: Session):
     logger.info(f"🔄 Processing {len(positions)} positions for {user.username}")
     
     if not positions:
-        logger.info("📭 No positions received - all trades may be closed")
+        logger.info("📭 No positions received - CLOSING ALL OPEN TRADES")
+        # When EA sends empty positions, close all open trades
+        open_trades = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.status == "open"
+        ).all()
+        
+        closed_count = 0
+        for trade in open_trades:
+            trade.status = "closed"
+            trade.close_time = datetime.utcnow()
+            trade.close_price = trade.current_price or trade.open_price
+            if trade.unrealized_profit:
+                trade.realized_profit = trade.unrealized_profit
+                trade.unrealized_profit = 0
+            closed_count += 1
+            
+        db.commit()
+        logger.info(f"🔒 CLOSED {closed_count} trades due to empty positions")
+        
+        # Send WebSocket update
+        await manager.send_user_message({
+            "type": "all_trades_closed",
+            "data": {"closed": closed_count},
+            "message": f"All {closed_count} trades closed"
+        }, user.id)
         return
     
     # Process each position from EA
