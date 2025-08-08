@@ -8,8 +8,6 @@ from typing import List, Dict, Optional, Any
 import logging
 from dataclasses import dataclass
 from sqlalchemy.orm import Session
-import os
-import platform
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

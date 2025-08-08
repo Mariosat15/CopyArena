@@ -8,8 +8,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
-    "backend": "cd backend && python app_ea.py",
-    "start": "vite preview --host 0.0.0.0 --port $PORT"
+    "backend": "cd backend && python app.py",
+    "start": "concurrently \"npm run backend\" \"npm run dev\""
   },
   "dependencies": {
     "react": "^18.2.0",
@@ -28,9 +28,12 @@
     "lucide-react": "^0.263.1",
     "recharts": "^2.8.0",
     "socket.io-client": "^4.7.2",
+    "@stripe/stripe-js": "^2.1.0",
+    "@stripe/react-stripe-js": "^2.1.0",
     "zustand": "^4.4.1",
     "axios": "^1.5.0",
-    "concurrently": "^8.2.1"
+    "date-fns": "^2.30.0",
+    "framer-motion": "^10.16.4"
   },
   "devDependencies": {
     "@types/react": "^18.2.15",
@@ -38,12 +41,13 @@
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",
     "@vitejs/plugin-react": "^4.0.3",
-    "autoprefixer": "^10.4.15",
+    "autoprefixer": "^10.4.14",
+    "concurrently": "^8.2.0",
     "eslint": "^8.45.0",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.3",
-    "postcss": "^8.4.28",
-    "tailwindcss": "^3.3.3",
+    "postcss": "^8.4.27",
+    "tailwindcss": "^3.3.0",
     "typescript": "^5.0.2",
     "vite": "^4.4.5"
   }
