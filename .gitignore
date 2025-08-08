@@ -77,4 +77,9 @@ Desktop.ini
 *.tmp
 *.temp
 temp/
-tmp/ 
+tmp/
+
+# Keep our useful scripts
+!push-to-github.bat
+!push-to-github.ps1
+!quick-push.bat 
