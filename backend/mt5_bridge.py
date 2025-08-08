@@ -534,16 +534,34 @@ class MT5Bridge:
         except Exception as e:
             logger.error(f"Error updating connection status: {e}")
 
-# Global MT5 bridge instance
-mt5_bridge = MT5Bridge()
+# Per-user MT5 bridge instances
+user_mt5_bridges = {}  # user_id -> MT5Bridge instance
+
+def get_user_mt5_bridge(user_id: int) -> MT5Bridge:
+    """Get or create MT5Bridge instance for a specific user"""
+    if user_id not in user_mt5_bridges:
+        user_mt5_bridges[user_id] = MT5Bridge()
+        logger.info(f"Created new MT5Bridge instance for user {user_id}")
+    return user_mt5_bridges[user_id]
 
 async def start_mt5_monitoring(user_id: int, login: int = None, password: str = None, server: str = None):
     """Start MT5 monitoring for a user"""
-    if await mt5_bridge.connect(login, password, server):
-        await mt5_bridge.monitor_account(user_id)
+    user_bridge = get_user_mt5_bridge(user_id)
+    if await user_bridge.connect(login, password, server):
+        await user_bridge.monitor_account(user_id)
     else:
-        logger.error("Failed to start MT5 monitoring")
+        logger.error(f"Failed to start MT5 monitoring for user {user_id}")
 
-def stop_mt5_monitoring():
-    """Stop MT5 monitoring"""
-    mt5_bridge.disconnect() 
+def stop_mt5_monitoring(user_id: int = None):
+    """Stop MT5 monitoring for a specific user or all users"""
+    if user_id:
+        if user_id in user_mt5_bridges:
+            user_mt5_bridges[user_id].disconnect()
+            del user_mt5_bridges[user_id]
+            logger.info(f"Stopped MT5 monitoring for user {user_id}")
+    else:
+        # Stop all
+        for bridge in user_mt5_bridges.values():
+            bridge.disconnect()
+        user_mt5_bridges.clear()
+        logger.info("Stopped MT5 monitoring for all users") 

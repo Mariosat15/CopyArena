@@ -412,12 +412,9 @@ async def connect_mt5(connection_data: MT5ConnectionRequest, background_tasks: B
     return {"message": "MT5 connection established", "status": "connecting"}
 
 @app.get("/api/mt5/status")
-async def get_mt5_status(db: Session = Depends(get_db)):
+async def get_mt5_status(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get MT5 connection status"""
-    # Use current user
-    user = db.query(User).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    # User is already provided by dependency injection
     
     connection = db.query(MT5Connection).filter(MT5Connection.user_id == user.id).first()
     if not connection:
@@ -431,12 +428,9 @@ async def get_mt5_status(db: Session = Depends(get_db)):
     }
 
 @app.post("/api/mt5/sync")
-async def sync_mt5_trades(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+async def sync_mt5_trades(background_tasks: BackgroundTasks, request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Manually sync MT5 trades"""
-    # Use current user
-    user = db.query(User).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    # User is already provided by dependency injection
     
     connection = db.query(MT5Connection).filter(MT5Connection.user_id == user.id).first()
     if not connection:
@@ -444,39 +438,41 @@ async def sync_mt5_trades(background_tasks: BackgroundTasks, db: Session = Depen
     
     # Trigger sync in background
     try:
-        from mt5_bridge import mt5_bridge
+        from mt5_bridge import get_user_mt5_bridge
+        # Get user-specific MT5 bridge
+        user_bridge = get_user_mt5_bridge(user.id)
         # First ensure MT5 is connected
-        if not mt5_bridge.connected:
-            success = await mt5_bridge.connect()
+        if not user_bridge.connected:
+            success = await user_bridge.connect()
             if not success:
                 raise HTTPException(status_code=500, detail="Failed to connect to MT5")
         
-        background_tasks.add_task(mt5_bridge.sync_trades_to_database, user.id, db)
+        background_tasks.add_task(user_bridge.sync_trades_to_database, user.id, db)
     except ImportError:
         logger.warning("MT5 bridge not available")
     
     return {"message": "Trade sync initiated"}
 
 @app.post("/api/mt5/cleanup")
-async def cleanup_mt5_trades(db: Session = Depends(get_db)):
+async def cleanup_mt5_trades(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Clean up duplicate or orphaned trades"""
-    # Use current user
-    user = db.query(User).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    # User is already provided by dependency injection
     
     try:
-        from mt5_bridge import mt5_bridge
+        from mt5_bridge import get_user_mt5_bridge
+        
+        # Get user-specific MT5 bridge
+        user_bridge = get_user_mt5_bridge(user.id)
         
         # Ensure MT5 is connected
-        if not mt5_bridge.connected:
-            success = await mt5_bridge.connect()
+        if not user_bridge.connected:
+            success = await user_bridge.connect()
             if not success:
                 raise HTTPException(status_code=500, detail="Failed to connect to MT5")
         
         # Get current MT5 trades
-        open_positions = mt5_bridge.get_open_positions()
-        historical_trades = mt5_bridge.get_trade_history(days=30)
+        open_positions = user_bridge.get_open_positions()
+        historical_trades = user_bridge.get_trade_history(days=30)
         all_mt5_trades = open_positions + historical_trades
         mt5_tickets = {str(trade.ticket) for trade in all_mt5_trades}
         
@@ -849,41 +845,44 @@ async def get_account_stats(request: Request, user: User = Depends(get_current_u
     # User is already provided by dependency injection
     
     try:
-        from mt5_bridge import mt5_bridge
+        from mt5_bridge import get_user_mt5_bridge
+        
+        # Get user-specific MT5 bridge
+        user_bridge = get_user_mt5_bridge(user.id)
         
         # Ensure MT5 is connected
-        if not mt5_bridge.connected:
-            success = await mt5_bridge.connect()
+        if not user_bridge.connected:
+            success = await user_bridge.connect()
             if not success:
                 raise HTTPException(status_code=500, detail="Failed to connect to MT5")
-        
+
         # Get current account info from MT5
-        account_info = mt5_bridge._get_account_info()
+        account_info = user_bridge._get_account_info()
         logger.info(f"Account info retrieved: {account_info.__dict__ if account_info else 'None'}")
-        
+
         # Get all trades for calculations
         trades = db.query(Trade).filter(Trade.user_id == user.id).all()
-        
+
         # Calculate trade statistics
         open_trades = [t for t in trades if t.is_open]
         closed_trades = [t for t in trades if not t.is_open]
-        
+
         # Historical profit (closed trades only)
         historical_profit = sum(t.profit for t in closed_trades)
-        
-        # Floating profit (open trades only) 
+
+        # Floating profit (open trades only)
         floating_profit = sum(t.profit for t in open_trades)
-        
+
         # Total realized + unrealized
         total_profit = historical_profit + floating_profit
-        
+
         # Win rate calculation (closed trades only)
         profitable_closed = len([t for t in closed_trades if t.profit > 0])
         win_rate = (profitable_closed / len(closed_trades)) * 100 if closed_trades else 0
-        
+
         # Calculate margin level percentage
         margin_level_percent = account_info.margin_level if account_info and account_info.margin_level else 0
-        
+
         return {
             # Account Info from MT5
             "account": {
@@ -897,7 +896,7 @@ async def get_account_stats(request: Request, user: User = Depends(get_current_u
                 "free_margin": round(account_info.free_margin, 2) if account_info else 0,
                 "margin_level": round(margin_level_percent, 2) if margin_level_percent else 0,
             },
-            
+
             # Trade Statistics
             "trading": {
                 "total_trades": len(trades),
@@ -908,14 +907,14 @@ async def get_account_stats(request: Request, user: User = Depends(get_current_u
                 "total_profit": round(total_profit, 2),
                 "win_rate": round(win_rate, 2),
             },
-            
+
             # Real-time status
             "status": {
-                "mt5_connected": mt5_bridge.connected,
+                "mt5_connected": user_bridge.connected,
                 "last_update": datetime.now().isoformat(),
             }
         }
-        
+
     except Exception as e:
         logger.error(f"Error getting account stats: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get account stats: {e}")
