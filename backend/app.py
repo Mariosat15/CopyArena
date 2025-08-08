@@ -117,6 +117,18 @@ def get_user_by_api_key(api_key: str, db: Session) -> User:
         user_api_keys[api_key] = user.id
     return user
 
+# ===== UTILITY ENDPOINTS =====
+
+@app.get("/")
+async def root():
+    """Root endpoint for connectivity testing"""
+    return {"status": "ok", "service": "CopyArena API", "version": "1.0.0"}
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+
 # === EA DATA ENDPOINTS ===
 
 @app.post("/api/ea/data")
@@ -316,20 +328,14 @@ async def handle_history_update(user: User, history: list, db: Session):
 # === WEB APP ENDPOINTS ===
 
 @app.get("/api/auth/session")
-async def get_session(user: User = Depends(get_current_user)):
+async def get_session(request: Request, user: User = Depends(get_current_user)):
     """Get current session user info"""
     return {
-        "user": {
-            "id": user.id,
-            "username": user.username,
-            "email": user.email,
-            "api_key": user.api_key,
-            "subscription_plan": user.subscription_plan,
-            "credits": user.credits,
-            "xp_points": user.xp_points,
-            "level": user.level,
-            "is_online": user.is_online
-        }
+        "session_id": request.cookies.get("session_id", "unknown"), 
+        "user_id": user.id,
+        "username": user.username,
+        "api_key": user.api_key,
+        "message": "Session valid"
     }
 
 @app.post("/api/auth/session")
@@ -337,17 +343,11 @@ async def create_session(request: Request, db: Session = Depends(get_db)):
     """Create/get session user info"""
     user = get_current_user(request, db)
     return {
-        "user": {
-            "id": user.id,
-            "username": user.username,
-            "email": user.email,
-            "api_key": user.api_key,
-            "subscription_plan": user.subscription_plan,
-            "credits": user.credits,
-            "xp_points": user.xp_points,
-            "level": user.level,
-            "is_online": user.is_online
-        }
+        "session_id": request.cookies.get("session_id", "unknown"),
+        "user_id": user.id,
+        "username": user.username,
+        "api_key": user.api_key,
+        "message": "Session active"
     }
 
 @app.post("/api/auth/login")
