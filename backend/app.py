@@ -502,10 +502,11 @@ async def cleanup_mt5_trades(request: Request, user: User = Depends(get_current_
         raise HTTPException(status_code=500, detail=f"Cleanup failed: {e}")
 
 @app.get("/api/mt5/debug")
-async def debug_mt5_connection(db: Session = Depends(get_db)):
+async def debug_mt5_connection(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Debug MT5 connection and get detailed status"""
     try:
-        from mt5_bridge import mt5_bridge
+        from mt5_bridge import get_user_mt5_bridge
+        user_bridge = get_user_mt5_bridge(user.id)
         import MetaTrader5 as mt5
         
         # Check if MT5 is initialized
@@ -523,7 +524,7 @@ async def debug_mt5_connection(db: Session = Depends(get_db)):
         
         result = {
             "mt5_initialized": True,
-            "bridge_connected": mt5_bridge.connected,
+            "bridge_connected": user_bridge.connected,
             "terminal_info": {
                 "name": terminal_info.name if terminal_info else None,
                 "path": terminal_info.path if terminal_info else None,
@@ -924,7 +925,7 @@ async def auto_sync_mt5_trades():
     while True:
         try:
             from models import SessionLocal, User, MT5Connection
-            from mt5_bridge import mt5_bridge
+            from mt5_bridge import get_user_mt5_bridge
             
             # Wait a bit before starting
             await asyncio.sleep(10)
@@ -936,17 +937,20 @@ async def auto_sync_mt5_trades():
                 
                 for connection in connections:
                     try:
-                        # Ensure MT5 is connected
-                        if not mt5_bridge.connected:
-                            logger.info("Auto-sync: Attempting to connect to MT5...")
-                            success = await mt5_bridge.connect()
+                        # Get user-specific MT5 bridge
+                        user_bridge = get_user_mt5_bridge(connection.user_id)
+                        
+                        # Ensure MT5 is connected for this user
+                        if not user_bridge.connected:
+                            logger.info(f"Auto-sync: Attempting to connect to MT5 for user {connection.user_id}...")
+                            success = await user_bridge.connect()
                             if not success:
-                                logger.warning("Auto-sync: Failed to connect to MT5")
+                                logger.warning(f"Auto-sync: Failed to connect to MT5 for user {connection.user_id}")
                                 continue
                         
                         # Sync trades for this user
                         logger.info(f"Auto-sync: Syncing trades for user {connection.user_id}")
-                        await mt5_bridge.sync_trades_to_database(connection.user_id, db)
+                        await user_bridge.sync_trades_to_database(connection.user_id, db)
                         
                     except Exception as e:
                         logger.error(f"Auto-sync error for user {connection.user_id}: {e}")
