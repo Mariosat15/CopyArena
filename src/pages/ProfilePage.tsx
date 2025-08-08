@@ -1,213 +1,348 @@
 // @ts-ignore
-import React from 'react'
+import React, { useState, useEffect } from 'react'
 import { useAuthStore } from '../stores/authStore'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Button } from '../components/ui/button'
 import { Badge } from '../components/ui/badge'
 import { Progress } from '../components/ui/progress'
-import { Edit, Crown, CreditCard, Settings, Trophy } from 'lucide-react'
-import { formatCurrency, getProgressToNextLevel } from '../lib/utils'
+import { Download, Copy, CheckCircle, AlertCircle, ExternalLink } from 'lucide-react'
+import { useToast } from '../hooks/use-toast'
+import api from '../lib/api'
 
-export function ProfilePage() {
+export default function ProfilePage() {
   const { user } = useAuthStore()
+  const { toast } = useToast()
+  const [apiKey, setApiKey] = useState('')
+  const [isConnected, setIsConnected] = useState(false)
+  const [setupStep, setSetupStep] = useState(1)
 
-  if (!user) return null
+  useEffect(() => {
+    fetchUserData()
+  }, [])
 
-  const progressToNextLevel = getProgressToNextLevel(user.xp_points, user.level)
+  const fetchUserData = async () => {
+    try {
+      const response = await api.get('/api/auth/session')
+      setApiKey(response.data.user.api_key)
+      
+      // Check connection status
+      const statsResponse = await api.get('/api/account/stats')
+      setIsConnected(statsResponse.data.is_connected)
+    } catch (error) {
+      console.error('Error fetching user data:', error)
+    }
+  }
+
+  const copyApiKey = () => {
+    navigator.clipboard.writeText(apiKey)
+    toast({
+      title: "API Key Copied!",
+      description: "Your API key has been copied to clipboard.",
+    })
+  }
+
+  const downloadEA = async () => {
+    try {
+      const response = await api.get('/api/ea/download', {
+        responseType: 'blob'
+      })
+      
+      const blob = new Blob([response.data], { type: 'text/plain' })
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = 'CopyArenaConnector.mq5'
+      link.click()
+      window.URL.revokeObjectURL(url)
+      
+      toast({
+        title: "EA Downloaded!",
+        description: "CopyArena Expert Advisor has been downloaded.",
+      })
+      
+      setSetupStep(2)
+    } catch (error) {
+      toast({
+        title: "Download Failed",
+        description: "Failed to download EA. Please try again.",
+        variant: "destructive"
+      })
+    }
+  }
+
+  const getProgressPercentage = (level: number) => {
+    return ((level % 10) / 10) * 100
+  }
+
+  const getUserStats = () => {
+    // Mock stats - in real app, fetch from API
+    return {
+      totalTrades: 45,
+      winRate: 73.5,
+      totalProfit: 2847.50,
+      followers: 28,
+      following: 12
+    }
+  }
+
+  const stats = getUserStats()
 
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-3xl font-bold">Profile</h1>
-        <p className="text-muted-foreground">
-          Manage your account and view your trading statistics.
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold">Profile & Setup</h1>
+          <p className="text-muted-foreground">
+            Manage your account and connect your MT5 terminal
+          </p>
+        </div>
+        <div className="flex items-center space-x-2">
+          {isConnected ? (
+            <Badge variant="default" className="bg-green-500">
+              <CheckCircle className="w-4 h-4 mr-1" />
+              Connected
+            </Badge>
+          ) : (
+            <Badge variant="secondary" className="bg-red-500 text-white">
+              <AlertCircle className="w-4 h-4 mr-1" />
+              Not Connected
+            </Badge>
+          )}
+        </div>
       </div>
 
-      {/* Profile Overview */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* User Info */}
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle>Profile Information</CardTitle>
-              <Button variant="outline" size="sm">
-                <Edit className="h-4 w-4 mr-2" />
-                Edit
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-6">
-              {/* Avatar and Basic Info */}
-              <div className="flex items-center space-x-4">
-                <div className="w-16 h-16 bg-primary rounded-full flex items-center justify-center">
-                  <span className="text-primary-foreground text-2xl font-bold">
-                    {user.username.charAt(0).toUpperCase()}
-                  </span>
-                </div>
-                <div>
-                  <h3 className="text-2xl font-bold">{user.username}</h3>
-                  <p className="text-muted-foreground">{user.email}</p>
-                  <div className="flex items-center space-x-2 mt-2">
-                    <Badge variant="secondary">Level {user.level}</Badge>
-                    <Badge variant={user.subscription_plan === 'free' ? 'outline' : 'default'}>
-                      {user.subscription_plan.charAt(0).toUpperCase() + user.subscription_plan.slice(1)}
-                    </Badge>
-                  </div>
-                </div>
-              </div>
-
-              {/* XP Progress */}
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium">Level Progress</span>
-                  <span className="text-sm text-muted-foreground">
-                    {user.xp_points.toLocaleString()} XP
-                  </span>
-                </div>
-                <Progress value={progressToNextLevel} className="h-2" />
-                <p className="text-xs text-muted-foreground mt-1">
-                  {progressToNextLevel.toFixed(0)}% to Level {user.level + 1}
-                </p>
-              </div>
-
-              {/* Stats Grid */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="text-center p-4 border rounded-lg">
-                  <div className="text-2xl font-bold profit-text">
-                    {formatCurrency(user.stats?.total_profit || 0)}
-                  </div>
-                  <p className="text-sm text-muted-foreground">Total Profit</p>
-                </div>
-                <div className="text-center p-4 border rounded-lg">
-                  <div className="text-2xl font-bold">{user.stats?.win_rate || 0}%</div>
-                  <p className="text-sm text-muted-foreground">Win Rate</p>
-                </div>
-                <div className="text-center p-4 border rounded-lg">
-                  <div className="text-2xl font-bold">{user.stats?.total_trades || 0}</div>
-                  <p className="text-sm text-muted-foreground">Total Trades</p>
-                </div>
-                <div className="text-center p-4 border rounded-lg">
-                  <div className="text-2xl font-bold">{user.stats?.followers_count || 0}</div>
-                  <p className="text-sm text-muted-foreground">Followers</p>
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Subscription & Credits */}
-        <div className="space-y-6">
-          {/* Subscription */}
+        {/* Profile Info */}
+        <div className="lg:col-span-1 space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center space-x-2">
-                <Crown className="h-5 w-5" />
-                <span>Subscription</span>
-              </CardTitle>
+              <CardTitle>Profile</CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                <div className="text-center">
-                  <Badge 
-                    variant={user.subscription_plan === 'free' ? 'outline' : 'default'}
-                    className="text-lg px-4 py-2"
-                  >
-                    {user.subscription_plan.charAt(0).toUpperCase() + user.subscription_plan.slice(1)} Plan
-                  </Badge>
+            <CardContent className="space-y-4">
+              <div>
+                <label className="text-sm font-medium">Username</label>
+                <p className="text-lg">{user?.username}</p>
+              </div>
+              <div>
+                <label className="text-sm font-medium">Email</label>
+                <p className="text-lg">{user?.email}</p>
+              </div>
+              <div>
+                <label className="text-sm font-medium">Subscription</label>
+                <Badge variant="outline">{user?.subscription_plan?.toUpperCase()}</Badge>
+              </div>
+              <div>
+                <label className="text-sm font-medium">Level</label>
+                <div className="flex items-center space-x-2">
+                  <span className="text-lg font-bold">{user?.level}</span>
+                  <Progress value={getProgressPercentage(user?.level || 1)} className="flex-1" />
                 </div>
-                
-                {user.subscription_plan === 'free' && (
-                  <div className="text-center space-y-2">
-                    <p className="text-sm text-muted-foreground">
-                      Upgrade to unlock copy trading and AI reports
-                    </p>
-                    <Button className="w-full">
-                      <Crown className="h-4 w-4 mr-2" />
-                      Upgrade Now
-                    </Button>
-                  </div>
-                )}
-
-                {user.subscription_plan !== 'free' && (
-                  <div className="text-center space-y-2">
-                    <p className="text-sm text-muted-foreground">
-                      Enjoy full access to all features
-                    </p>
-                    <Button variant="outline" className="w-full">
-                      <Settings className="h-4 w-4 mr-2" />
-                      Manage Plan
-                    </Button>
-                  </div>
-                )}
               </div>
             </CardContent>
           </Card>
 
-          {/* Credits */}
+          {/* Stats Card */}
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center space-x-2">
-                <CreditCard className="h-5 w-5" />
-                <span>AI Credits</span>
-              </CardTitle>
+              <CardTitle>Trading Stats</CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                <div className="text-center">
-                  <div className="text-3xl font-bold">{user.credits}</div>
-                  <p className="text-sm text-muted-foreground">Available credits</p>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-sm text-muted-foreground">Total Trades</p>
+                  <p className="text-2xl font-bold">{stats.totalTrades}</p>
                 </div>
-                
-                <Button variant="outline" className="w-full">
-                  <CreditCard className="h-4 w-4 mr-2" />
-                  Buy More Credits
+                <div>
+                  <p className="text-sm text-muted-foreground">Win Rate</p>
+                  <p className="text-2xl font-bold text-green-600">{stats.winRate}%</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Total Profit</p>
+                  <p className="text-2xl font-bold text-green-600">${stats.totalProfit}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Followers</p>
+                  <p className="text-2xl font-bold">{stats.followers}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Setup Instructions */}
+        <div className="lg:col-span-2">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <span>MT5 Connection Setup</span>
+                <Badge className="ml-2" variant={isConnected ? "default" : "secondary"}>
+                  {isConnected ? "Connected" : "Setup Required"}
+                </Badge>
+              </CardTitle>
+              <CardDescription>
+                Connect your MT5 terminal to CopyArena using our Expert Advisor
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {/* Step 1: Get API Key */}
+              <div className="space-y-3">
+                <div className="flex items-center space-x-2">
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
+                    setupStep >= 1 ? 'bg-blue-500 text-white' : 'bg-gray-200'
+                  }`}>
+                    1
+                  </div>
+                  <h3 className="font-semibold">Your API Key</h3>
+                </div>
+                <div className="ml-10 space-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    Copy your unique API key to connect your EA to your account:
+                  </p>
+                  <div className="flex items-center space-x-2 p-3 bg-gray-50 rounded-lg">
+                    <code className="flex-1 text-sm font-mono">{apiKey}</code>
+                    <Button size="sm" variant="outline" onClick={copyApiKey}>
+                      <Copy className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Step 2: Download EA */}
+              <div className="space-y-3">
+                <div className="flex items-center space-x-2">
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
+                    setupStep >= 2 ? 'bg-blue-500 text-white' : 'bg-gray-200'
+                  }`}>
+                    2
+                  </div>
+                  <h3 className="font-semibold">Download Expert Advisor</h3>
+                </div>
+                <div className="ml-10 space-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    Download our custom Expert Advisor for MT5:
+                  </p>
+                  <Button onClick={downloadEA} className="flex items-center space-x-2">
+                    <Download className="w-4 h-4" />
+                    <span>Download CopyArenaConnector.mq5</span>
+                  </Button>
+                </div>
+              </div>
+
+              {/* Step 3: Install EA */}
+              <div className="space-y-3">
+                <div className="flex items-center space-x-2">
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
+                    setupStep >= 3 ? 'bg-blue-500 text-white' : 'bg-gray-200'
+                  }`}>
+                    3
+                  </div>
+                  <h3 className="font-semibold">Install in MT5</h3>
+                </div>
+                <div className="ml-10 space-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    Follow these steps to install the EA in your MT5 terminal:
+                  </p>
+                  <ol className="list-decimal list-inside space-y-1 text-sm">
+                    <li>Open your MT5 terminal</li>
+                    <li>Press <kbd className="px-2 py-1 bg-gray-100 rounded">F4</kbd> to open MetaEditor</li>
+                    <li>Go to <strong>File → Open Data Folder</strong></li>
+                    <li>Navigate to <strong>MQL5 → Experts</strong></li>
+                    <li>Copy the downloaded <code>CopyArenaConnector.mq5</code> file here</li>
+                    <li>Return to MT5 and refresh the Navigator (F5)</li>
+                  </ol>
+                  <Button variant="outline" size="sm" onClick={() => setSetupStep(4)}>
+                    <CheckCircle className="w-4 h-4 mr-2" />
+                    EA Installed
+                  </Button>
+                </div>
+              </div>
+
+              {/* Step 4: Configure EA */}
+              <div className="space-y-3">
+                <div className="flex items-center space-x-2">
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
+                    setupStep >= 4 ? 'bg-blue-500 text-white' : 'bg-gray-200'
+                  }`}>
+                    4
+                  </div>
+                  <h3 className="font-semibold">Configure & Activate</h3>
+                </div>
+                <div className="ml-10 space-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    Configure the EA with your API key:
+                  </p>
+                  <ol className="list-decimal list-inside space-y-1 text-sm">
+                    <li>Drag <strong>CopyArenaConnector</strong> from Navigator to any chart</li>
+                    <li>In the EA settings, paste your API key in the <strong>API_Key</strong> field</li>
+                    <li>Make sure <strong>Allow WebRequest</strong> is enabled in MT5 settings</li>
+                    <li>Add <strong>https://copyarena-backend.onrender.com</strong> to allowed URLs</li>
+                    <li>Click <strong>OK</strong> to activate the EA</li>
+                  </ol>
+                  <div className="p-3 bg-blue-50 rounded-lg">
+                    <p className="text-sm">
+                      <strong>Note:</strong> The EA will automatically sync your trading data to CopyArena every 5 seconds.
+                      You'll see connection status in the MT5 logs.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Step 5: Verify Connection */}
+              {setupStep >= 4 && (
+                <div className="space-y-3">
+                  <div className="flex items-center space-x-2">
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
+                      isConnected ? 'bg-green-500 text-white' : 'bg-gray-200'
+                    }`}>
+                      5
+                    </div>
+                    <h3 className="font-semibold">Verify Connection</h3>
+                  </div>
+                  <div className="ml-10 space-y-2">
+                    <p className="text-sm text-muted-foreground">
+                      Check if your EA is connected successfully:
+                    </p>
+                    {isConnected ? (
+                      <div className="p-3 bg-green-50 rounded-lg flex items-center space-x-2">
+                        <CheckCircle className="w-5 h-5 text-green-500" />
+                        <span className="text-sm text-green-700">
+                          Great! Your MT5 account is connected and sending data to CopyArena.
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="p-3 bg-yellow-50 rounded-lg flex items-center space-x-2">
+                        <AlertCircle className="w-5 h-5 text-yellow-500" />
+                        <span className="text-sm text-yellow-700">
+                          Waiting for connection... Make sure the EA is running and check MT5 logs for any errors.
+                        </span>
+                      </div>
+                    )}
+                    <Button variant="outline" size="sm" onClick={fetchUserData}>
+                      Refresh Status
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* Troubleshooting */}
+              <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+                <h4 className="font-semibold mb-2">Troubleshooting</h4>
+                <ul className="text-sm space-y-1 text-muted-foreground">
+                  <li>• Make sure MT5 AutoTrading is enabled (green button in toolbar)</li>
+                  <li>• Check that WebRequest URLs include our server in MT5 settings</li>
+                  <li>• Verify your internet connection is stable</li>
+                  <li>• Check MT5 Expert logs for connection errors</li>
+                </ul>
+                <Button variant="link" size="sm" className="mt-2 p-0">
+                  <ExternalLink className="w-4 h-4 mr-1" />
+                  View Detailed Setup Guide
                 </Button>
-                
-                <p className="text-xs text-muted-foreground text-center">
-                  Use credits to generate AI reports and analytics
-                </p>
               </div>
             </CardContent>
           </Card>
         </div>
       </div>
-
-      {/* Achievements */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center space-x-2">
-            <Trophy className="h-5 w-5" />
-            <span>Achievements</span>
-          </CardTitle>
-          <CardDescription>Badges and milestones you've earned</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {user.badges?.map((badge, index) => (
-              <div key={index} className="flex items-center space-x-3 p-4 border rounded-lg">
-                <div className="text-3xl">{badge.icon}</div>
-                <div>
-                  <h4 className="font-semibold">{badge.name}</h4>
-                  <p className="text-sm text-muted-foreground">
-                    Earned {new Date(badge.earned_at).toLocaleDateString()}
-                  </p>
-                </div>
-              </div>
-            )) || (
-              <div className="col-span-full text-center py-8">
-                <Trophy className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                <h3 className="text-lg font-semibold mb-2">No badges yet</h3>
-                <p className="text-muted-foreground">
-                  Start trading to unlock your first achievement!
-                </p>
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
     </div>
   )
 } 
