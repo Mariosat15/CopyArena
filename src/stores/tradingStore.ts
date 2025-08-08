@@ -76,6 +76,7 @@ interface TradingState {
   // LIVE EA Data (bypasses database)
   livePositions: any[]
   liveAccountStats: any
+  liveHistory: any[]  // Closed trades from EA
   
   // Actions
   fetchTrades: () => Promise<void>
@@ -94,6 +95,7 @@ interface TradingState {
   // LIVE EA Data Updates
   setLivePositions: (positions: any[]) => void
   setLiveAccountStats: (stats: any) => void
+  setLiveHistory: (history: any[]) => void
 }
 
 export const useTradingStore = create<TradingState>((set) => ({
@@ -106,6 +108,7 @@ export const useTradingStore = create<TradingState>((set) => ({
   // LIVE EA Data
   livePositions: [],
   liveAccountStats: null,
+  liveHistory: [],
 
   fetchTrades: async () => {
     try {
@@ -259,5 +262,10 @@ export const useTradingStore = create<TradingState>((set) => ({
   setLiveAccountStats: (stats: any) => {
     console.log('🎯 Setting LIVE account stats:', stats)
     set({ liveAccountStats: stats })
+  },
+
+  setLiveHistory: (history: any[]) => {
+    console.log('🎯 Setting LIVE history:', history)
+    set({ liveHistory: history })
   }
 })) 

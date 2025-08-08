@@ -548,10 +548,34 @@ async def handle_positions_update(user: User, positions: list, db: Session):
     db.commit()
     logger.info(f"🎯 LIVE UPDATE: {new_count} new, {updated_count} updated trades")
     
+    # 🔥 CRITICAL: Check for trades that were closed (exist in DB but not in EA positions)
+    current_ea_tickets = {str(pos.get("ticket", "")) for pos in positions if pos.get("ticket")}
+    db_open_trades = db.query(Trade).filter(
+        Trade.user_id == user.id,
+        Trade.status == "open"
+    ).all()
+    
+    closed_missing_count = 0
+    for db_trade in db_open_trades:
+        if db_trade.ticket not in current_ea_tickets:
+            # This trade is open in DB but missing from EA positions = CLOSED!
+            db_trade.status = "closed"
+            db_trade.close_time = datetime.utcnow()
+            db_trade.close_price = db_trade.current_price or db_trade.open_price
+            if db_trade.unrealized_profit:
+                db_trade.realized_profit = db_trade.unrealized_profit
+                db_trade.unrealized_profit = 0
+            closed_missing_count += 1
+            logger.info(f"🔒 CLOSED missing trade {db_trade.ticket} (not in EA positions)")
+    
+    if closed_missing_count > 0:
+        db.commit()
+        logger.info(f"🎯 CLOSED {closed_missing_count} trades that were missing from EA positions")
+    
     # Send immediate WebSocket update for instant UI refresh
     await manager.send_user_message({
         "type": "positions_updated",
-        "data": {"new": new_count, "updated": updated_count},
+        "data": {"new": new_count, "updated": updated_count, "closed": closed_missing_count},
         "message": "Live trades updated"
     }, user.id)
 
@@ -562,37 +586,70 @@ async def handle_orders_update(user: User, orders: list, db: Session):
     pass
 
 async def handle_history_update(user: User, history: list, db: Session):
-    """Handle trade history update"""
+    """Handle trade history update - Only process NEW history entries"""
+    logger.info(f"📊 Processing {len(history)} history deals for {user.username}")
+    
+    if not history:
+        logger.info("📭 No history received")
+        return
+    
+    # Track which tickets we've already processed to avoid duplicates
+    existing_tickets = set(
+        db.query(Trade.ticket).filter(Trade.user_id == user.id).all()
+    )
+    existing_tickets = {ticket[0] for ticket in existing_tickets}
+    
+    closed_count = 0
+    new_count = 0
+    skipped_count = 0
+    
     for deal in history:
-        ticket = deal["ticket"]
-        
-        # Check if we already have this deal
-        existing_trade = db.query(Trade).filter(
-            Trade.user_id == user.id,
-            Trade.ticket == ticket
-        ).first()
-        
-        if not existing_trade:
-            # Create closed trade from history
+        try:
+            ticket = str(deal.get("ticket", ""))
+            if not ticket:
+                continue
+                
+            # SKIP if we already have this ticket - DON'T re-process
+            if ticket in existing_tickets:
+                skipped_count += 1
+                continue
+                
+            # Only process truly NEW history entries
             new_trade = Trade(
                 user_id=user.id,
                 ticket=ticket,
                 symbol=deal.get("symbol", ""),
                 trade_type="buy" if deal.get("type") == 0 else "sell",
-                volume=deal.get("volume", 0),
-                open_price=deal.get("price", 0),
-                current_price=deal.get("price", 0),
-                realized_profit=deal.get("profit", 0),
-                swap=deal.get("swap", 0),
-                commission=deal.get("commission", 0),
-                open_time=datetime.fromtimestamp(deal.get("time", 0)),
-                close_time=datetime.fromtimestamp(deal.get("time", 0)),
+                volume=float(deal.get("volume", 0)),
+                open_price=float(deal.get("price", 0)),
+                current_price=float(deal.get("price", 0)),
+                close_price=float(deal.get("price", 0)),
+                realized_profit=float(deal.get("profit", 0)),
+                swap=float(deal.get("swap", 0)),
+                commission=float(deal.get("commission", 0)),
+                open_time=datetime.fromtimestamp(deal.get("time", 0)) if deal.get("time") else datetime.utcnow(),
+                close_time=datetime.fromtimestamp(deal.get("time", 0)) if deal.get("time") else datetime.utcnow(),
                 comment=deal.get("comment", ""),
                 status="closed"
             )
             db.add(new_trade)
+            new_count += 1
+            logger.info(f"📋 NEW historical trade {ticket}: P&L={new_trade.realized_profit:.2f}")
+                    
+        except Exception as e:
+            logger.error(f"❌ Error processing history deal {deal}: {e}")
+            continue
     
     db.commit()
+    logger.info(f"🎯 HISTORY UPDATE: {new_count} NEW, {skipped_count} skipped (already exist)")
+    
+    # Only send WebSocket update if we processed new trades
+    if new_count > 0:
+        await manager.send_user_message({
+            "type": "history_update", 
+            "data": {"new_trades": new_count},
+            "message": f"{new_count} new trades added to history"
+        }, user.id)
 
 # === WEB APP ENDPOINTS ===
 
@@ -970,6 +1027,16 @@ async def get_marketplace(db: Session = Depends(get_db)):
                 for user in users
             ]
         }
+
+@app.get("/api/debug/live-data")
+async def debug_live_data(user: User = Depends(get_current_user)):
+    """Debug endpoint to see current live data"""
+    return {
+        "user": user.username,
+        "positions_count": "Check WebSocket data",
+        "history_count": "Check WebSocket data", 
+        "note": "Live data is in WebSocket messages, not stored in backend"
+    }
 
 # === WEBSOCKET ===
 

@@ -16,6 +16,7 @@ export function DashboardPage() {
     accountStats, 
     livePositions, 
     liveAccountStats,
+    liveHistory,
     fetchTrades, 
     fetchAccountStats, 
     removeDuplicateTrades 
@@ -90,12 +91,27 @@ export function DashboardPage() {
     ? livePositions.reduce((sum, pos) => sum + (pos.profit || 0), 0)
     : 0 // Zero when no live positions
 
+  // SIMPLE SOLUTION: Database for closed, EA for open
+  const liveOpenTrades = livePositions.length                    // EA: Real-time open trades
+  const dbClosedTrades = trades.filter(t => !t.is_open).length   // DB: Stable closed count
+  const totalTrades = liveOpenTrades + dbClosedTrades            // Combined count
+
+  // Use stable database count for closed trades
+  const actualClosedTrades = dbClosedTrades
+
   const totalProfit = accountStats?.trading.total_profit ?? trades.reduce((sum, trade) => sum + trade.profit, 0)
-  const historicalProfit = accountStats?.trading.historical_profit ?? trades.filter(t => !t.is_open).reduce((sum, trade) => sum + trade.profit, 0)
+  const historicalProfit = liveHistory.length > 0 
+    ? liveHistory.reduce((sum, hist) => sum + (hist.profit || 0), 0)
+    : (accountStats?.trading.historical_profit ?? trades.filter(t => !t.is_open).reduce((sum, trade) => sum + trade.profit, 0))
   const floatingProfit = livePositions.length > 0 
     ? liveFloatingProfit 
     : 0 // Zero when no live positions
-  const winRate = accountStats?.trading.win_rate ?? (trades.length > 0 ? (trades.filter(trade => trade.profit > 0).length / trades.length) * 100 : 0)
+
+  // Calculate win rate: Database for closed, EA for open
+  const dbClosedWinningTrades = trades.filter(t => !t.is_open && t.profit > 0).length
+  const liveWinningTrades = livePositions.filter(pos => (pos.profit || 0) > 0).length
+  const totalWinningTrades = dbClosedWinningTrades + liveWinningTrades
+  const winRate = totalTrades > 0 ? (totalWinningTrades / totalTrades) * 100 : 0
   // const progressToNextLevel = getProgressToNextLevel(user.xp_points, user.level) // TODO: Use for level progress
 
   return (
@@ -205,14 +221,14 @@ export function DashboardPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Realized P&L</CardTitle>
-            <Trophy className="h-4 w-4 text-muted-foreground" />
+            <Trophy className={`h-4 w-4 ${liveHistory.length > 0 ? 'text-green-500' : 'text-muted-foreground'}`} />
           </CardHeader>
           <CardContent>
             <div className={`text-2xl font-bold ${historicalProfit >= 0 ? 'profit-text' : 'loss-text'}`}>
               {formatCurrency(historicalProfit)}
             </div>
             <p className="text-xs text-muted-foreground">
-              From closed trades
+              {liveHistory.length > 0 ? '🚀 Live from EA history' : 'From closed trades'}
             </p>
           </CardContent>
         </Card>
@@ -235,12 +251,13 @@ export function DashboardPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Win Rate</CardTitle>
-            <Target className="h-4 w-4 text-muted-foreground" />
+            <Target className={`h-4 w-4 ${liveOpenTrades > 0 ? 'text-green-500' : 'text-muted-foreground'}`} />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{winRate.toFixed(1)}%</div>
             <p className="text-xs text-muted-foreground">
-              {accountStats?.trading.closed_trades ?? trades.filter(t => !t.is_open).length} closed trades
+              {actualClosedTrades} closed (DB), {liveOpenTrades} live (EA)
+              {liveOpenTrades > 0 && ' 🚀'}
             </p>
           </CardContent>
         </Card>

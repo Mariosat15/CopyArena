@@ -118,12 +118,21 @@ export const useWebSocket = (userId?: number) => {
 
           case 'positions_updated':
             console.log('🚀 LIVE positions updated:', data.data)
-            // This is for database sync confirmation only
+            // Show toast for new trades
             if (data.data?.new > 0) {
               toast({
                 title: "New Trade Opened! 📈",
                 description: `${data.data.new} new trade(s) detected`,
               })
+            }
+            // Show toast and refresh data for closed trades
+            if (data.data?.closed > 0) {
+              toast({
+                title: "Trades Closed! 🔒",
+                description: `${data.data.closed} trade(s) were closed`,
+              })
+              // Refresh database trades to update closed count
+              useTradingStore.getState().fetchTrades()
             }
             break
 
@@ -146,10 +155,9 @@ export const useWebSocket = (userId?: number) => {
             break
 
           case 'history_update':
-            console.log('History update:', data.data)
-            // Refresh trades and stats when history changes
-            useTradingStore.getState().fetchTrades()
-            useTradingStore.getState().fetchAccountStats()
+            console.log('🚀 LIVE History from EA:', data.data)
+            // Update UI DIRECTLY with EA history data (closed trades)
+            useTradingStore.getState().setLiveHistory(data.data)
             break
 
           case 'connection_status':
