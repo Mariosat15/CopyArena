@@ -30,7 +30,7 @@ export function DashboardPage() {
     const interval = setInterval(async () => {
       await Promise.all([fetchTrades(), fetchAccountStats()])
       setLastUpdate(new Date())
-    }, 3000)
+    }, 2000)
     
     return () => clearInterval(interval)
   }, [fetchTrades])
