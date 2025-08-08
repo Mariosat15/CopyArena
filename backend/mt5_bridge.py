@@ -457,6 +457,26 @@ class MT5Bridge:
                 # Sync trades to database
                 await self.sync_trades_to_database(user_id)
                 
+                # Send WebSocket account update
+                try:
+                    from websocket_manager import manager
+                    if current_account_info:
+                        account_data = {
+                            "type": "account_update",
+                            "data": {
+                                "balance": current_account_info.balance,
+                                "equity": current_account_info.equity,
+                                "margin": current_account_info.margin,
+                                "free_margin": current_account_info.free_margin,
+                                "margin_level": current_account_info.margin_level,
+                                "currency": current_account_info.currency,
+                                "timestamp": datetime.now().isoformat()
+                            }
+                        }
+                        await manager.send_user_message(account_data, user_id)
+                except Exception as e:
+                    logger.error(f"Error sending account WebSocket update: {e}")
+                
                 # Call callback with updates if provided
                 if callback:
                     await callback({
@@ -467,7 +487,7 @@ class MT5Bridge:
                     })
                 
                 # Wait before next update
-                await asyncio.sleep(2)  # Update every 2 seconds for faster response
+                await asyncio.sleep(1)  # Update every 1 second for real-time response
                 
             except Exception as e:
                 logger.error(f"Error in account monitoring: {e}")

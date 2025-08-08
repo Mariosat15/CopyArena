@@ -26,11 +26,11 @@ export function DashboardPage() {
   useEffect(() => {
     handleRefresh()
     
-    // Set up periodic refresh every 10 seconds
+    // Set up periodic refresh every 3 seconds for real-time updates
     const interval = setInterval(async () => {
       await Promise.all([fetchTrades(), fetchAccountStats()])
       setLastUpdate(new Date())
-    }, 10000)
+    }, 3000)
     
     return () => clearInterval(interval)
   }, [fetchTrades])

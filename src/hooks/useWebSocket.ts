@@ -97,6 +97,9 @@ export const useWebSocket = (userId?: number) => {
 
           case 'account_update':
             console.log('Account update:', data.data)
+            // Refresh account stats when account updates
+            const { fetchAccountStats } = useTradingStore.getState()
+            fetchAccountStats()
             toast({
               title: "Account Update",
               description: `Balance: $${data.data.balance?.toFixed(2) || 'N/A'}`,
@@ -146,9 +149,9 @@ export const useWebSocket = (userId?: number) => {
                 variant: "default",
               })
               
-              // Force refresh trades data to ensure UI is up to date
-              const { fetchTrades, removeDuplicateTrades } = useTradingStore.getState()
-              fetchTrades()
+              // Force refresh trades data and account stats to ensure UI is up to date
+              const { fetchTrades, fetchAccountStats, removeDuplicateTrades } = useTradingStore.getState()
+              Promise.all([fetchTrades(), fetchAccountStats()])
               // Remove any duplicates after sync
               setTimeout(() => removeDuplicateTrades(), 1000)
             }

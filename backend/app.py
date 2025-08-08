@@ -794,6 +794,7 @@ async def get_account_stats(db: Session = Depends(get_db)):
         
         # Get current account info from MT5
         account_info = mt5_bridge._get_account_info()
+        logger.info(f"Account info retrieved: {account_info.__dict__ if account_info else 'None'}")
         
         # Get all trades for calculations
         trades = db.query(Trade).filter(Trade.user_id == user.id).all()
@@ -889,8 +890,8 @@ async def auto_sync_mt5_trades():
             finally:
                 db.close()
             
-            # Wait 15 seconds before next sync
-            await asyncio.sleep(15)
+            # Wait 5 seconds before next sync  
+            await asyncio.sleep(5)
             
         except Exception as e:
             logger.error(f"Auto-sync background task error: {e}")
@@ -906,6 +907,16 @@ async def startup_event():
     # Start background tasks
     asyncio.create_task(start_ping_task())
     asyncio.create_task(auto_sync_mt5_trades())
+    
+    # Start MT5 monitoring for the default user
+    try:
+        user = db.query(User).first()
+        if user:
+            from mt5_bridge import start_mt5_monitoring
+            asyncio.create_task(start_mt5_monitoring(user.id))
+            logger.info(f"Started MT5 monitoring for user {user.id}")
+    except Exception as e:
+        logger.error(f"Failed to start MT5 monitoring: {e}")
 
 if __name__ == "__main__":
     import uvicorn
