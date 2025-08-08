@@ -1,5 +1,6 @@
-from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, Request, Response, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from datetime import datetime, timedelta
 import json
@@ -9,6 +10,9 @@ from typing import List, Dict, Optional
 from websocket_manager import manager, start_ping_task
 from models import User, Trade, Follow, MT5Connection, Badge, UserBadge, SessionLocal, get_db
 from sqlalchemy.orm import Session
+import os
+from contextlib import asynccontextmanager
+import uuid
 
 app = FastAPI(title="CopyArena API", version="1.0.0")
 
@@ -22,7 +26,93 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Add session management imports
+from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from sqlalchemy.orm import Session
+import asyncio
+import logging
+import os
+from contextlib import asynccontextmanager
+import uuid
+from typing import Optional
 
+# Add session storage
+user_sessions = {}  # session_id -> user_id mapping
+
+def get_or_create_session_user(session_id: str, db: Session) -> User:
+    """Get or create a user for this session"""
+    if session_id in user_sessions:
+        user_id = user_sessions[session_id]
+        user = db.query(User).filter(User.id == user_id).first()
+        if user:
+            return user
+    
+    # Create a new user for this session
+    new_user = User(
+        email=f"user_{session_id[:8]}@copyarena.com",
+        username=f"Trader_{session_id[:8]}",
+        hashed_password=hash_password("temp_password"),
+        subscription_plan="free",
+        credits=0,
+        xp_points=0,
+        level=1,
+        is_online=True
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    # Store the session mapping
+    user_sessions[session_id] = new_user.id
+    
+    # Start MT5 monitoring for this user
+    try:
+        from mt5_bridge import start_mt5_monitoring
+        asyncio.create_task(start_mt5_monitoring(new_user.id))
+        logger.info(f"Started MT5 monitoring for new user {new_user.id} (session: {session_id[:8]})")
+    except Exception as e:
+        logger.error(f"Failed to start MT5 monitoring for user {new_user.id}: {e}")
+    
+    return new_user
+
+def get_session_id_from_request(request: Request) -> str:
+    """Get or create session ID from request"""
+    # Try to get session from cookies
+    session_id = request.cookies.get("copyarena_session")
+    if not session_id:
+        # Create new session
+        session_id = str(uuid.uuid4())
+    return session_id
+
+def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
+    """Get current user based on session"""
+    session_id = get_session_id_from_request(request)
+    return get_or_create_session_user(session_id, db)
+
+# Session management endpoint
+@app.post("/api/auth/session")
+async def create_session(response: Response, request: Request, db: Session = Depends(get_db)):
+    """Create a new user session"""
+    session_id = get_session_id_from_request(request)
+    user = get_or_create_session_user(session_id, db)
+    
+    # Set session cookie
+    response.set_cookie(
+        key="copyarena_session",
+        value=session_id,
+        max_age=30 * 24 * 60 * 60,  # 30 days
+        httponly=True,
+        samesite="lax"
+    )
+    
+    return {
+        "session_id": session_id[:8],  # Shortened for display
+        "user_id": user.id,
+        "username": user.username,
+        "message": "Session created successfully"
+    }
 
 # Pydantic models
 class UserCreate(BaseModel):
@@ -63,21 +153,7 @@ def hash_password(password: str) -> str:
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return hashed_password == f"hashed_{plain_password}"
 
-def ensure_user_exists(db: Session):
-    # Create a default user if none exists (for MT5 integration)
-    if db.query(User).count() == 0:
-        default_user = User(
-            email="mt5trader@copyarena.com",
-            username="MT5Trader",
-            hashed_password=hash_password("changeme"),
-            subscription_plan="free",
-            credits=0,
-            xp_points=0,
-            level=1,
-            is_online=True
-        )
-        db.add(default_user)
-        db.commit()
+# Removed: ensure_user_exists - now using session-based user creation
 
 # API Routes
 @app.get("/")
@@ -140,11 +216,8 @@ async def login(user_data: UserLogin, db: Session = Depends(get_db)):
     }
 
 @app.get("/api/user/profile")
-async def get_profile(db: Session = Depends(get_db)):
-    # Get the current user (simplified auth)
-    user = db.query(User).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+async def get_profile(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # User is already provided by dependency injection
     
     # Get trading stats
     trades = db.query(Trade).filter(Trade.user_id == user.id).all()
@@ -240,11 +313,8 @@ async def get_leaderboard(db: Session = Depends(get_db), sort_by: str = "xp_poin
     return result[:50]
 
 @app.get("/api/trades")
-async def get_trades(db: Session = Depends(get_db)):
-    # Get trades for current user
-    user = db.query(User).first()
-    if not user:
-        return []
+async def get_trades(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # Get trades for current user (user provided by dependency injection)
     
     trades = db.query(Trade).filter(Trade.user_id == user.id).order_by(Trade.open_time.desc()).all()
     
@@ -297,12 +367,9 @@ async def follow_trader(follow_request: FollowRequest, db: Session = Depends(get
 
 # MT5 Connection Endpoints
 @app.post("/api/mt5/connect")
-async def connect_mt5(connection_data: MT5ConnectionRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+async def connect_mt5(connection_data: MT5ConnectionRequest, background_tasks: BackgroundTasks, request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Connect user's MT5 account"""
-    # Use current user
-    user = db.query(User).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    # User is already provided by dependency injection
     
     # Check if connection already exists
     existing_connection = db.query(MT5Connection).filter(MT5Connection.user_id == user.id).first()
@@ -777,11 +844,9 @@ async def get_performance_analytics(db: Session = Depends(get_db)):
     }
 
 @app.get("/api/account/stats")
-async def get_account_stats(db: Session = Depends(get_db)):
+async def get_account_stats(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get comprehensive account statistics including MT5 account info and trade metrics"""
-    user = db.query(User).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    # User is already provided by dependency injection
     
     try:
         from mt5_bridge import mt5_bridge
@@ -899,25 +964,11 @@ async def auto_sync_mt5_trades():
 
 @app.on_event("startup")
 async def startup_event():
-    from models import SessionLocal
-    db = SessionLocal()
-    ensure_user_exists(db)
-    db.close()
-    
-    # Start background tasks
+    # Start background tasks (MT5 monitoring now starts per user session)
     asyncio.create_task(start_ping_task())
     asyncio.create_task(auto_sync_mt5_trades())
-    
-    # Start MT5 monitoring for the default user
-    try:
-        user = db.query(User).first()
-        if user:
-            from mt5_bridge import start_mt5_monitoring
-            asyncio.create_task(start_mt5_monitoring(user.id))
-            logger.info(f"Started MT5 monitoring for user {user.id}")
-    except Exception as e:
-        logger.error(f"Failed to start MT5 monitoring: {e}")
+    logger.info("CopyArena API started - Multi-user session system active")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000) 
+    uvicorn.run(app, host="0.0.0.0", port=8000) 
