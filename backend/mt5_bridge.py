@@ -1,6 +1,14 @@
-import pandas as pd
-import numpy as np
 from datetime import datetime, timedelta
+
+# Optional imports for data processing (only needed for real MT5)
+try:
+    import pandas as pd
+    import numpy as np
+    PANDAS_AVAILABLE = True
+except ImportError:
+    pd = None
+    np = None
+    PANDAS_AVAILABLE = False
 import asyncio
 import json
 from typing import List, Dict, Optional, Any
