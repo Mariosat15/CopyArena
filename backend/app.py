@@ -69,13 +69,8 @@ def get_or_create_session_user(session_id: str, db: Session) -> User:
     # Store the session mapping
     user_sessions[session_id] = new_user.id
     
-    # Start MT5 monitoring for this user
-    try:
-        from mt5_bridge import start_mt5_monitoring
-        asyncio.create_task(start_mt5_monitoring(new_user.id))
-        logger.info(f"Started MT5 monitoring for new user {new_user.id} (session: {session_id[:8]})")
-    except Exception as e:
-        logger.error(f"Failed to start MT5 monitoring for user {new_user.id}: {e}")
+    # DO NOT start MT5 monitoring automatically - users must connect their own accounts first
+    logger.info(f"Created new user {new_user.id} (session: {session_id[:8]}) - awaiting MT5 credentials")
     
     return new_user
 
@@ -860,7 +855,7 @@ async def get_account_stats(request: Request, user: User = Depends(get_current_u
                 raise HTTPException(status_code=500, detail="Failed to connect to MT5")
 
         # Get current account info from MT5
-        account_info = user_bridge._get_account_info()
+        account_info = await user_bridge._get_account_info()
         logger.info(f"Account info retrieved: {account_info.__dict__ if account_info else 'None'}")
 
         # Get all trades for calculations
@@ -942,10 +937,15 @@ async def auto_sync_mt5_trades():
                         # Get user-specific MT5 bridge
                         user_bridge = get_user_mt5_bridge(connection.user_id)
                         
-                        # Ensure MT5 is connected for this user
+                        # Ensure MT5 is connected for this user (only if they have credentials)
                         if not user_bridge.connected:
                             logger.info(f"Auto-sync: Attempting to connect to MT5 for user {connection.user_id}...")
-                            success = await user_bridge.connect()
+                            # Pass the stored credentials from the connection
+                            success = await user_bridge.connect(
+                                connection.login, 
+                                connection.password, 
+                                connection.server
+                            )
                             if not success:
                                 logger.warning(f"Auto-sync: Failed to connect to MT5 for user {connection.user_id}")
                                 continue

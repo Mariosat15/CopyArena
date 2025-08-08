@@ -86,13 +86,10 @@ class MT5Bridge:
                             return False
                         logger.info(f"User {self.user_id}: Successfully logged in to MT5 account {self.login}")
                 else:
-                    # Try to connect to already logged in account (fallback)
-                    account_info = mt5.account_info()
-                    if account_info is None:
-                        logger.warning(f"User {self.user_id}: No account logged in MT5 terminal")
-                        return False
-                    else:
-                        logger.info(f"User {self.user_id}: Connected to existing MT5 account {account_info.login}")
+                    # NO FALLBACK - Users must provide their own credentials for isolation
+                    logger.error(f"User {self.user_id}: No credentials provided - cannot connect to MT5")
+                    logger.error(f"User {self.user_id}: Each user must provide their own MT5 account credentials")
+                    return False
                 
                 self.connected = True
                 self.account_info = await self._get_account_info()
