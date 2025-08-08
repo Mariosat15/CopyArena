@@ -67,10 +67,15 @@ def get_or_create_session_user(session_id: str, db: Session) -> User:
     # Create a new user for this session with timestamp to ensure uniqueness
     import time
     timestamp = str(int(time.time()))[-6:]  # Last 6 digits of timestamp
+    
+    # Generate unique API key
+    temp_api_key = f"ca_temp_{uuid.uuid4().hex[:16]}"
+    
     new_user = User(
         email=f"user_{session_id[:8]}_{timestamp}@copyarena.com",
         username=f"Trader_{session_id[:8]}_{timestamp}",
         hashed_password=hash_password("temp_password"),
+        api_key=temp_api_key,
         subscription_plan="free",
         credits=0,
         xp_points=0,
@@ -81,16 +86,17 @@ def get_or_create_session_user(session_id: str, db: Session) -> User:
     db.commit()
     db.refresh(new_user)
     
-    # Generate unique API key for this user
-    api_key = f"ca_{new_user.id}_{uuid.uuid4().hex[:16]}"
-    new_user.api_key = api_key
+    # Update with proper API key using the actual user ID
+    final_api_key = f"ca_{new_user.id}_{uuid.uuid4().hex[:16]}"
+    new_user.api_key = final_api_key
     db.commit()
+    db.refresh(new_user)
     
     # Store the session mapping
     user_sessions[session_id] = new_user.id
-    user_api_keys[api_key] = new_user.id
+    user_api_keys[final_api_key] = new_user.id
     
-    logger.info(f"Created new user {new_user.id} (session: {session_id[:8]}) with API key: {api_key[:20]}...")
+    logger.info(f"Created new user {new_user.id} (session: {session_id[:8]}) with API key: {final_api_key[:20]}...")
     
     return new_user
 
@@ -295,6 +301,24 @@ async def handle_history_update(user: User, history: list, db: Session):
 @app.get("/api/auth/session")
 async def get_session(user: User = Depends(get_current_user)):
     """Get current session user info"""
+    return {
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "api_key": user.api_key,
+            "subscription_plan": user.subscription_plan,
+            "credits": user.credits,
+            "xp_points": user.xp_points,
+            "level": user.level,
+            "is_online": user.is_online
+        }
+    }
+
+@app.post("/api/auth/session")
+async def create_session(request: Request, db: Session = Depends(get_db)):
+    """Create/get session user info"""
+    user = get_current_user(request, db)
     return {
         "user": {
             "id": user.id,
