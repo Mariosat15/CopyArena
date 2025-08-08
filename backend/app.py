@@ -411,13 +411,47 @@ async def get_account_stats(user: User = Depends(get_current_user), db: Session 
         )).label("total_profit")
     ).scalar() or 0
     
+    # Calculate trading stats
+    open_trades = db.query(Trade).filter(Trade.user_id == user.id, Trade.status == "open").count()
+    closed_trades = db.query(Trade).filter(Trade.user_id == user.id, Trade.status == "closed").count()
+    
+    # Calculate floating profit (unrealized)
+    floating_profit = db.query(Trade).filter(
+        Trade.user_id == user.id, 
+        Trade.status == "open"
+    ).with_entities(func.sum(Trade.unrealized_profit)).scalar() or 0
+    
+    # Calculate historical profit (realized)
+    historical_profit = db.query(Trade).filter(
+        Trade.user_id == user.id, 
+        Trade.status == "closed"
+    ).with_entities(func.sum(Trade.realized_profit)).scalar() or 0
+    
+    # Calculate win rate
+    winning_trades = db.query(Trade).filter(
+        Trade.user_id == user.id,
+        Trade.status == "closed",
+        Trade.realized_profit > 0
+    ).count()
+    win_rate = (winning_trades / closed_trades * 100) if closed_trades > 0 else 0
+    
     return {
-        "balance": float(connection.account_balance) if connection and connection.account_balance else 0,
-        "equity": float(connection.account_equity) if connection and connection.account_equity else 0,
-        "margin": float(connection.account_margin) if connection and connection.account_margin else 0,
-        "free_margin": float(connection.account_free_margin) if connection and connection.account_free_margin else 0,
-        "margin_level": float(connection.account_margin_level) if connection and connection.account_margin_level else 0,
-        "total_profit": float(total_profit),
+        "account": {
+            "balance": float(connection.account_balance) if connection and connection.account_balance else 0,
+            "equity": float(connection.account_equity) if connection and connection.account_equity else 0,
+            "margin": float(connection.account_margin) if connection and connection.account_margin else 0,
+            "free_margin": float(connection.account_free_margin) if connection and connection.account_free_margin else 0,
+            "margin_level": float(connection.account_margin_level) if connection and connection.account_margin_level else 0,
+            "currency": connection.account_currency if connection else "USD"
+        },
+        "trading": {
+            "total_profit": float(total_profit),
+            "floating_profit": float(floating_profit),
+            "historical_profit": float(historical_profit),
+            "open_trades": open_trades,
+            "closed_trades": closed_trades,
+            "win_rate": win_rate
+        },
         "is_connected": connection.is_connected if connection else False
     }
 
