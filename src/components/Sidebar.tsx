@@ -1,3 +1,5 @@
+// @ts-ignore
+import React from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useAuthStore } from '../stores/authStore'
 import { cn } from '../lib/utils'
@@ -43,11 +45,11 @@ export function Sidebar() {
           <div className="flex items-center space-x-3">
             <div className="w-10 h-10 bg-primary rounded-full flex items-center justify-center">
               <span className="text-primary-foreground font-semibold">
-                {user.username.charAt(0).toUpperCase()}
+                {user.username ? user.username.charAt(0).toUpperCase() : 'U'}
               </span>
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium truncate">{user.username}</p>
+              <p className="text-sm font-medium truncate">{user.username || 'Loading...'}</p>
               <div className="flex items-center space-x-2 mt-1">
                 <Badge variant="secondary">Level {user.level}</Badge>
                 <Badge variant="outline">{user.subscription_plan}</Badge>
