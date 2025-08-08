@@ -6,12 +6,15 @@ import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { TrendingUp, TrendingDown, Users, Trophy, Target, Zap, RefreshCw, Activity, DollarSign, PieChart, Calculator } from 'lucide-react'
 import { formatCurrency, formatPercentage, getProgressToNextLevel } from '../lib/utils'
+import { useToast } from '../hooks/use-toast'
 
 export function DashboardPage() {
   const { user } = useAuthStore()
   const { trades, accountStats, fetchTrades, fetchAccountStats, removeDuplicateTrades } = useTradingStore()
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [lastMarginLevel, setLastMarginLevel] = useState<number | null>(null)
+  const { toast } = useToast()
 
   const handleRefresh = async () => {
     setIsRefreshing(true)
@@ -22,6 +25,33 @@ export function DashboardPage() {
       setIsRefreshing(false)
     }
   }
+
+  // Check for margin level warnings
+  useEffect(() => {
+    if (accountStats?.account.margin_level !== undefined) {
+      const currentMarginLevel = accountStats.account.margin_level
+      
+      // Check if margin level dropped to 100% or below
+      if (currentMarginLevel <= 100 && (lastMarginLevel === null || lastMarginLevel > 100)) {
+        toast({
+          title: "⚠️ MARGIN CALL WARNING!",
+          description: `Margin Level: ${currentMarginLevel.toFixed(1)}% - Risk of position closure!`,
+          variant: "destructive",
+        })
+      }
+      
+      // Check if margin level is critically low (50% or below)
+      if (currentMarginLevel <= 50 && (lastMarginLevel === null || lastMarginLevel > 50)) {
+        toast({
+          title: "🚨 CRITICAL MARGIN LEVEL!",
+          description: `Margin Level: ${currentMarginLevel.toFixed(1)}% - Immediate action required!`,
+          variant: "destructive",
+        })
+      }
+      
+      setLastMarginLevel(currentMarginLevel)
+    }
+  }, [accountStats?.account.margin_level, lastMarginLevel, toast])
 
   useEffect(() => {
     handleRefresh()
@@ -118,14 +148,14 @@ export function DashboardPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Margin Level</CardTitle>
-            <Target className="h-4 w-4 text-muted-foreground" />
+            <Target className={`h-4 w-4 ${(accountStats?.account.margin_level ?? 0) <= 100 ? 'text-red-500' : 'text-muted-foreground'}`} />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
+            <div className={`text-2xl font-bold ${(accountStats?.account.margin_level ?? 0) <= 100 ? 'text-red-600' : ''}`}>
               {accountStats?.account.margin_level.toFixed(1) ?? '0.0'}%
             </div>
-            <p className="text-xs text-muted-foreground">
-              Current Margin Level
+            <p className={`text-xs ${(accountStats?.account.margin_level ?? 0) <= 100 ? 'text-red-500' : 'text-muted-foreground'}`}>
+              {(accountStats?.account.margin_level ?? 0) <= 100 ? 'MARGIN CALL WARNING!' : 'Current Margin Level'}
             </p>
           </CardContent>
         </Card>

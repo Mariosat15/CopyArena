@@ -128,6 +128,15 @@ export const useWebSocket = (userId?: number) => {
             })
             break
 
+          case 'margin_warning':
+            // Critical margin level warning
+            toast({
+              title: data.data.severity === 'critical' ? "🚨 CRITICAL MARGIN LEVEL!" : "⚠️ MARGIN CALL WARNING!",
+              description: `${data.data.message} - ${data.data.severity === 'critical' ? 'Immediate action required!' : 'Risk of position closure!'}`,
+              variant: "destructive",
+            })
+            break
+
           case 'trades_synced':
             // Refresh trades data when sync is complete (silently)
             console.log('Trades synced:', data.data)

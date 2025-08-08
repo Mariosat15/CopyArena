@@ -474,6 +474,20 @@ class MT5Bridge:
                             }
                         }
                         await manager.send_user_message(account_data, user_id)
+                        
+                        # Send margin level warning if needed
+                        if current_account_info.margin_level <= 100:
+                            margin_warning = {
+                                "type": "margin_warning",
+                                "data": {
+                                    "margin_level": current_account_info.margin_level,
+                                    "severity": "critical" if current_account_info.margin_level <= 50 else "warning",
+                                    "message": f"Margin Level: {current_account_info.margin_level:.1f}%",
+                                    "timestamp": datetime.now().isoformat()
+                                }
+                            }
+                            await manager.send_user_message(margin_warning, user_id)
+                            
                 except Exception as e:
                     logger.error(f"Error sending account WebSocket update: {e}")
                 
