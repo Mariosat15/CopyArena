@@ -1,20 +1,27 @@
 // @ts-ignore
-import React, { useState, useEffect } from 'react'
-import { useAuthStore } from '../stores/authStore'
+import React from 'react'
+import { useState, useEffect } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
-import { Button } from '../components/ui/button'
 import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
 import { Progress } from '../components/ui/progress'
-import { Download, Copy, CheckCircle, AlertCircle, ExternalLink } from 'lucide-react'
+import { Download, Copy, CheckCircle, Circle, AlertCircle, Wifi, WifiOff, ExternalLink } from 'lucide-react'
+import { api } from '../lib/api'
+import SessionService from '../lib/sessionService'
 import { useToast } from '../hooks/use-toast'
-import api from '../lib/api'
 
 export default function ProfilePage() {
-  const { user } = useAuthStore()
   const { toast } = useToast()
   const [apiKey, setApiKey] = useState('')
   const [isConnected, setIsConnected] = useState(false)
   const [setupStep, setSetupStep] = useState(1)
+  const [userInfo, setUserInfo] = useState({
+    username: 'Loading...',
+    email: 'loading@copyarena.com',
+    level: 1,
+    xp_points: 0,
+    subscription_plan: 'free'
+  })
 
   useEffect(() => {
     fetchUserData()
@@ -22,8 +29,14 @@ export default function ProfilePage() {
 
   const fetchUserData = async () => {
     try {
-      const response = await api.get('/api/auth/session')
-      setApiKey(response.data.user.api_key)
+      // Use session service to get persistent API key
+      const sessionService = SessionService.getInstance()
+      const sessionData = await sessionService.initializeSession()
+      setApiKey(sessionData.api_key)
+      
+      // Get full user profile
+      const profileResponse = await api.get('/api/user/profile')
+      setUserInfo(profileResponse.data)
       
       // Check connection status
       const statsResponse = await api.get('/api/account/stats')
@@ -122,21 +135,21 @@ export default function ProfilePage() {
             <CardContent className="space-y-4">
               <div>
                 <label className="text-sm font-medium">Username</label>
-                <p className="text-lg">{user?.username}</p>
+                <p className="text-lg">{userInfo.username}</p>
               </div>
               <div>
                 <label className="text-sm font-medium">Email</label>
-                <p className="text-lg">{user?.email}</p>
+                <p className="text-lg">{userInfo.email}</p>
               </div>
               <div>
                 <label className="text-sm font-medium">Subscription</label>
-                <Badge variant="outline">{user?.subscription_plan?.toUpperCase()}</Badge>
+                <Badge variant="outline">{userInfo.subscription_plan?.toUpperCase()}</Badge>
               </div>
               <div>
                 <label className="text-sm font-medium">Level</label>
                 <div className="flex items-center space-x-2">
-                  <span className="text-lg font-bold">{user?.level}</span>
-                  <Progress value={getProgressPercentage(user?.level || 1)} className="flex-1" />
+                  <span className="text-lg font-bold">{userInfo.level}</span>
+                  <Progress value={getProgressPercentage(userInfo.level || 1)} className="flex-1" />
                 </div>
               </div>
             </CardContent>
