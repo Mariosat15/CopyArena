@@ -476,12 +476,19 @@ class MT5Bridge:
                         await manager.send_user_message(account_data, user_id)
                         
                         # Send margin level warning if needed
-                        if current_account_info.margin_level <= 100:
+                        if current_account_info.margin_level <= 150:
+                            if current_account_info.margin_level <= 50:
+                                severity = "critical"
+                            elif current_account_info.margin_level <= 100:
+                                severity = "high"
+                            else:
+                                severity = "warning"
+                                
                             margin_warning = {
                                 "type": "margin_warning",
                                 "data": {
                                     "margin_level": current_account_info.margin_level,
-                                    "severity": "critical" if current_account_info.margin_level <= 50 else "warning",
+                                    "severity": severity,
                                     "message": f"Margin Level: {current_account_info.margin_level:.1f}%",
                                     "timestamp": datetime.now().isoformat()
                                 }

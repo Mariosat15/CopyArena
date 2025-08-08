@@ -129,10 +129,23 @@ export const useWebSocket = (userId?: number) => {
             break
 
           case 'margin_warning':
-            // Critical margin level warning
+            // Margin level warning with different severity levels
+            let title, description
+            
+            if (data.data.severity === 'critical') {
+              title = "🚨 CRITICAL MARGIN LEVEL!"
+              description = `${data.data.message} - Immediate action required!`
+            } else if (data.data.severity === 'high') {
+              title = "🚨 MARGIN CALL ALERT!"
+              description = `${data.data.message} - Risk of position closure!`
+            } else {
+              title = "⚠️ MARGIN WARNING!"
+              description = `${data.data.message} - Consider reducing position size!`
+            }
+            
             toast({
-              title: data.data.severity === 'critical' ? "🚨 CRITICAL MARGIN LEVEL!" : "⚠️ MARGIN CALL WARNING!",
-              description: `${data.data.message} - ${data.data.severity === 'critical' ? 'Immediate action required!' : 'Risk of position closure!'}`,
+              title,
+              description,
               variant: "destructive",
             })
             break
