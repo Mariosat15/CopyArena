@@ -386,8 +386,9 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int):
 
 # === STATIC FILES AND SPA ===
 
-# Serve static files
-app.mount("/assets", StaticFiles(directory="dist/assets"), name="static")
+# Only mount static files if they exist (for production builds)
+if Path("dist/assets").exists():
+    app.mount("/assets", StaticFiles(directory="dist/assets"), name="static")
 
 @app.get("/{full_path:path}")
 async def serve_spa(full_path: str):
@@ -399,7 +400,7 @@ async def serve_spa(full_path: str):
     if index_file.exists():
         return FileResponse(index_file)
     else:
-        return HTMLResponse("<h1>CopyArena</h1><p>Please build the frontend first</p>")
+        return HTMLResponse("<h1>CopyArena Backend API</h1><p>Backend is running successfully!</p>")
 
 if __name__ == "__main__":
     import uvicorn

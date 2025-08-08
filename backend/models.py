@@ -4,9 +4,6 @@ from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
 import bcrypt
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
 
 # Configuration
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./copyarena.db")
