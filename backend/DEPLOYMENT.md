@@ -1,40 +1,42 @@
 # CopyArena Backend Deployment
 
-## Cloud Deployment (Render)
+## Windows Cloud Deployment (Production)
 
-This backend is designed to work on both Windows (with real MT5) and Linux cloud servers (with mock MT5).
+This backend is designed for **real MetaTrader5 integration** on Windows cloud servers.
 
-### Render Configuration
+### Supported Cloud Providers
 
-1. **Build Command**: `pip install -r requirements.txt`
-2. **Start Command**: `uvicorn app:app --host 0.0.0.0 --port $PORT`
-3. **Python Version**: 3.11
-4. **Root Directory**: `backend`
+✅ **DigitalOcean Windows Droplets** (Recommended)  
+✅ **Azure Windows Virtual Machines**  
+✅ **AWS Windows EC2 Instances**  
+✅ **Google Cloud Windows VMs**  
 
-### Environment Variables
+### Quick Start
 
-The app automatically detects the environment:
-- **Windows**: Uses real MetaTrader5 library
-- **Linux (Cloud)**: Uses mock MT5 for demo purposes
+1. **Create Windows Server** (2019/2022)
+2. **Install Dependencies**: Python, Git, Node.js, MT5
+3. **Clone Repository**: `git clone https://github.com/Mariosat15/CopyArena.git`
+4. **Setup Backend**: `pip install -r requirements.txt`
+5. **Configure MT5**: Enable API and automated trading
+6. **Run Server**: `python app.py`
 
-### Mock MT5 Features
+### Features
 
-In cloud deployment, the app provides:
-- Mock account information
-- Simulated trade data
-- Demo mode functionality
-- Full API compatibility
+- **Real MT5 Integration**: Live trading data and account info
+- **Multi-User Support**: Each user connects their own MT5 account
+- **WebSocket Real-time Updates**: Live trade monitoring
+- **Production Ready**: Windows services, SSL, monitoring
 
-This allows users to:
-- Register and test the interface
-- See how the app works
-- Experience the UI/UX
-- Connect their real MT5 when using local deployment
+### Full Setup Guide
+
+See `WINDOWS_DEPLOYMENT.md` for complete step-by-step instructions.
 
 ## Local Development
 
-For real MT5 integration, run locally on Windows with:
+For local Windows development:
 ```bash
 pip install -r requirements.txt
 python app.py
-``` 
+```
+
+**Note**: This application requires Windows environment for MetaTrader5 integration. 

@@ -1,12 +1,9 @@
 """
 CopyArena Backend API
 
-This backend supports both:
-1. Local development with real MT5 connections (Windows)
-2. Cloud deployment with mock MT5 for demo purposes (Linux/Render)
-
-In cloud mode, MT5 functionality is simulated to allow the app to run
-on Linux servers where MetaTrader5 library is not available.
+Production-ready trading platform with real MetaTrader5 integration.
+Designed for Windows cloud servers (DigitalOcean, Azure, AWS) with 
+full MT5 connectivity for live trading operations.
 """
 
 from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, Request, Response, BackgroundTasks
