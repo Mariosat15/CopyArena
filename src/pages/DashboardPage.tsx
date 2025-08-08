@@ -135,22 +135,22 @@ export function DashboardPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Profit/Loss</CardTitle>
+            <CardTitle className="text-sm font-medium">Unrealized P&L</CardTitle>
             <TrendingUp className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className={`text-2xl font-bold ${totalProfit >= 0 ? 'profit-text' : 'loss-text'}`}>
-              {formatCurrency(totalProfit)}
+            <div className={`text-2xl font-bold ${floatingProfit >= 0 ? 'profit-text' : 'loss-text'}`}>
+              {formatCurrency(floatingProfit)}
             </div>
             <p className="text-xs text-muted-foreground">
-              Realized + Unrealized
+              From open positions
             </p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Historical P&L</CardTitle>
+            <CardTitle className="text-sm font-medium">Realized P&L</CardTitle>
             <Trophy className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
@@ -165,15 +165,15 @@ export function DashboardPage() {
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Floating P&L</CardTitle>
+            <CardTitle className="text-sm font-medium">Total P&L</CardTitle>
             <Activity className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className={`text-2xl font-bold ${floatingProfit >= 0 ? 'profit-text' : 'loss-text'}`}>
-              {formatCurrency(floatingProfit)}
+            <div className={`text-2xl font-bold ${totalProfit >= 0 ? 'profit-text' : 'loss-text'}`}>
+              {formatCurrency(totalProfit)}
             </div>
             <p className="text-xs text-muted-foreground">
-              From open trades
+              Realized + Unrealized
             </p>
           </CardContent>
         </Card>
