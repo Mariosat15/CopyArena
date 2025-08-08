@@ -1,4 +1,6 @@
-import React from 'react' // eslint-disable-line @typescript-eslint/no-unused-vars
+
+// @ts-ignore
+import React from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from './stores/authStore'
 import { useWebSocket } from './hooks/useWebSocket'

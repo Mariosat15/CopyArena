@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react' // eslint-disable-line @typescript-eslint/no-unused-vars
+// @ts-ignore
+import React, { useEffect, useState } from 'react'
 import { useTradingStore } from '../stores/tradingStore'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Button } from '../components/ui/button'

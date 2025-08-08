@@ -1,4 +1,5 @@
-import React, { useState } from 'react' // eslint-disable-line @typescript-eslint/no-unused-vars
+// @ts-ignore
+import React, { useState } from 'react'
 import { useAuthStore } from '../stores/authStore'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Button } from '../components/ui/button'
