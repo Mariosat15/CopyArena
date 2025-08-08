@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
-import { useToast } from '@/hooks/use-toast'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
+import { Button } from '../components/ui/button'
+import { Input } from '../components/ui/input'
+import { Badge } from '../components/ui/badge'
+import { useToast } from '../hooks/use-toast'
 import { Activity, AlertCircle, CheckCircle, Settings, Wifi, WifiOff } from 'lucide-react'
 import axios from 'axios'
 
@@ -30,6 +30,7 @@ const MT5ConnectionPage: React.FC = () => {
   const [isDebugging, setIsDebugging] = useState(false)
   const [tradeTestInfo, setTradeTestInfo] = useState<any>(null)
   const [isTestingTrades, setIsTestingTrades] = useState(false)
+  const [isCleaningUp, setIsCleaningUp] = useState(false)
   const [connectionForm, setConnectionForm] = useState<ConnectionForm>({
     login: '',
     password: '',
@@ -165,6 +166,40 @@ const MT5ConnectionPage: React.FC = () => {
       })
     } finally {
       setIsTestingTrades(false)
+    }
+  }
+
+  const handleCleanup = async () => {
+    setIsCleaningUp(true)
+
+    try {
+      const response = await axios.post('/api/mt5/cleanup')
+      
+      toast({
+        title: "Cleanup Completed! 🧹",
+        description: `${response.data.cleaned_trades} duplicate/orphaned trades cleaned`,
+        variant: "default"
+      })
+      
+      // Force refresh the frontend trade store
+      const { useTradingStore } = await import('../stores/tradingStore')
+      const { fetchTrades, removeDuplicateTrades } = useTradingStore.getState()
+      
+      // Refresh trades and remove duplicates
+      await fetchTrades()
+      setTimeout(() => removeDuplicateTrades(), 500)
+      
+      // Reload status after cleanup
+      setTimeout(loadMT5Status, 2000)
+      
+    } catch (error: any) {
+      toast({
+        title: "Cleanup Failed",
+        description: error.response?.data?.detail || "Failed to cleanup trades",
+        variant: "destructive"
+      })
+    } finally {
+      setIsCleaningUp(false)
     }
   }
 
@@ -357,6 +392,15 @@ const MT5ConnectionPage: React.FC = () => {
                 variant="outline"
               >
                 {isTestingTrades ? 'Testing Trades...' : 'Test Live Trades'}
+              </Button>
+              
+              <Button 
+                onClick={handleCleanup}
+                disabled={isCleaningUp}
+                className="w-full"
+                variant="outline"
+              >
+                {isCleaningUp ? 'Cleaning Up...' : 'Cleanup Duplicate Trades'}
               </Button>
             </div>
             

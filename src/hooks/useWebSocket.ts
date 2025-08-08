@@ -50,7 +50,39 @@ export const useWebSocket = (userId?: number) => {
         console.log('Received WebSocket message:', data)
 
         switch (data.type) {
+          case 'trade_new':
+            // New trade added
+            addTrade(data.data)
+            toast({
+              title: "New Trade Opened! 📈",
+              description: `${data.data.symbol} ${data.data.trade_type} ${data.data.volume} lots`,
+              variant: "default",
+            })
+            break
+
+          case 'trade_updated':
+            // Existing trade updated (P&L change)
+            updateTrade(data.data)
+            const profitChange = data.data.profit - data.data.old_profit
+            toast({
+              title: "Trade Updated 💰",
+              description: data.data.message,
+              variant: profitChange >= 0 ? "default" : "destructive",
+            })
+            break
+
+          case 'trade_closed':
+            // Trade was closed
+            updateTrade(data.data)
+            toast({
+              title: "Trade Closed! 🎯",
+              description: data.data.message,
+              variant: data.data.profit >= 0 ? "default" : "destructive",
+            })
+            break
+
           case 'trade_update':
+            // Legacy trade update (keep for backwards compatibility)
             if (data.data.is_open) {
               updateTrade(data.data)
             } else {
@@ -105,14 +137,21 @@ export const useWebSocket = (userId?: number) => {
           case 'trades_synced':
             // Refresh trades data when sync is complete
             console.log('Trades synced:', data.data)
-            toast({
-              title: "Trades Synced! ✅",
-              description: data.data.message,
-              variant: "default",
-            })
-            // Trigger trades refresh in the trading store
-            const { fetchTrades } = useTradingStore.getState()
-            fetchTrades()
+            
+            // Only show toast if there were actual changes
+            if (data.data.new_trades > 0 || data.data.updated_trades > 0 || (data.data.removed_trades && data.data.removed_trades > 0)) {
+              toast({
+                title: "Trades Synced! ✅",
+                description: data.data.message,
+                variant: "default",
+              })
+              
+              // Force refresh trades data to ensure UI is up to date
+              const { fetchTrades, removeDuplicateTrades } = useTradingStore.getState()
+              fetchTrades()
+              // Remove any duplicates after sync
+              setTimeout(() => removeDuplicateTrades(), 1000)
+            }
             break
 
           case 'leaderboard_update':

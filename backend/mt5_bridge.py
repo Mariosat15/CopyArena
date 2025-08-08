@@ -262,6 +262,16 @@ class MT5Bridge:
             historical_trades = self.get_trade_history(days=30)
             all_trades = open_positions + historical_trades
             
+            # Get current tickets from MT5
+            mt5_tickets = {str(trade.ticket) for trade in all_trades}
+            
+            # Get all database trades for this user
+            db_trades = db.query(Trade).filter(Trade.user_id == user_id).all()
+            
+            new_trades = []
+            updated_trades = []
+            removed_trades = []
+            
             for mt5_trade in all_trades:
                 # Check if trade already exists in database
                 existing_trade = db.query(Trade).filter(
@@ -285,39 +295,142 @@ class MT5Bridge:
                         is_open=mt5_trade.is_open
                     )
                     db.add(db_trade)
+                    new_trades.append(db_trade)
                 else:
-                    # Update existing trade (for open positions)
+                    # Check if trade has changed
+                    has_changed = False
+                    old_profit = existing_trade.profit
+                    old_is_open = existing_trade.is_open
+                    
                     if mt5_trade.is_open:
-                        existing_trade.close_price = mt5_trade.close_price
-                        existing_trade.profit = mt5_trade.profit
+                        # Update open position data
+                        if existing_trade.close_price != mt5_trade.close_price or existing_trade.profit != mt5_trade.profit:
+                            existing_trade.close_price = mt5_trade.close_price
+                            existing_trade.profit = mt5_trade.profit
+                            has_changed = True
                     else:
-                        existing_trade.close_price = mt5_trade.close_price
-                        existing_trade.close_time = mt5_trade.close_time
-                        existing_trade.profit = mt5_trade.profit
-                        existing_trade.is_open = False
+                        # Trade was closed
+                        if existing_trade.is_open or existing_trade.profit != mt5_trade.profit:
+                            existing_trade.close_price = mt5_trade.close_price
+                            existing_trade.close_time = mt5_trade.close_time
+                            existing_trade.profit = mt5_trade.profit
+                            existing_trade.is_open = False
+                            has_changed = True
+                    
+                    if has_changed:
+                        updated_trades.append((existing_trade, old_profit, old_is_open))
+            
+            # Handle trades that no longer exist in MT5 (cleanup old/duplicate trades)
+            for db_trade in db_trades:
+                if db_trade.ticket not in mt5_tickets:
+                    # This trade is in database but not in MT5 anymore
+                    if db_trade.is_open:
+                        # If it was marked as open but doesn't exist in MT5, mark as closed
+                        logger.info(f"Closing orphaned trade {db_trade.ticket} - not found in MT5")
+                        old_profit = db_trade.profit
+                        db_trade.is_open = False
+                        db_trade.close_time = datetime.now()
+                        removed_trades.append((db_trade, old_profit, True))
             
             db.commit()
-            logger.info(f"Synced {len(all_trades)} trades to database for user {user_id}")
+            logger.info(f"Synced {len(all_trades)} trades to database for user {user_id} (New: {len(new_trades)}, Updated: {len(updated_trades)}, Cleaned: {len(removed_trades)})")
             
-            # Send WebSocket notification about trade sync
+            # Send WebSocket notifications for individual trade updates
             try:
                 from websocket_manager import manager
                 import asyncio
                 
-                # Send trade sync notification
-                sync_data = {
-                    "type": "trades_synced",
-                    "data": {
-                        "trades_count": len(all_trades),
-                        "message": f"Synced {len(all_trades)} trades from MT5"
+                # Send notifications for new trades
+                for trade in new_trades:
+                    trade_data = {
+                        "type": "trade_new",
+                        "data": {
+                            "id": trade.id,
+                            "ticket": trade.ticket,
+                            "symbol": trade.symbol,
+                            "trade_type": trade.trade_type,
+                            "volume": trade.volume,
+                            "open_price": trade.open_price,
+                            "close_price": trade.close_price,
+                            "open_time": trade.open_time.isoformat() if trade.open_time else None,
+                            "close_time": trade.close_time.isoformat() if trade.close_time else None,
+                            "profit": trade.profit,
+                            "is_open": trade.is_open
+                        }
                     }
-                }
+                    asyncio.create_task(manager.send_user_message(trade_data, user_id))
                 
-                # Send notification (this will work in background task context)
-                asyncio.create_task(manager.send_user_message(sync_data, user_id))
+                # Send notifications for updated trades
+                for trade, old_profit, old_is_open in updated_trades:
+                    # Determine update type
+                    if old_is_open and not trade.is_open:
+                        update_type = "trade_closed"
+                        message = f"{trade.symbol} trade closed: {'+' if trade.profit >= 0 else ''}${trade.profit:.2f}"
+                    else:
+                        update_type = "trade_updated"
+                        profit_change = trade.profit - old_profit
+                        message = f"{trade.symbol} P&L update: {'+' if profit_change >= 0 else ''}${profit_change:.2f}"
+                    
+                    trade_data = {
+                        "type": update_type,
+                        "data": {
+                            "id": trade.id,
+                            "ticket": trade.ticket,
+                            "symbol": trade.symbol,
+                            "trade_type": trade.trade_type,
+                            "volume": trade.volume,
+                            "open_price": trade.open_price,
+                            "close_price": trade.close_price,
+                            "open_time": trade.open_time.isoformat() if trade.open_time else None,
+                            "close_time": trade.close_time.isoformat() if trade.close_time else None,
+                            "profit": trade.profit,
+                            "is_open": trade.is_open,
+                            "old_profit": old_profit,
+                            "old_is_open": old_is_open,
+                            "message": message
+                        }
+                    }
+                    asyncio.create_task(manager.send_user_message(trade_data, user_id))
+                
+                # Send notifications for cleaned up trades
+                for trade, old_profit, old_is_open in removed_trades:
+                    trade_data = {
+                        "type": "trade_closed",
+                        "data": {
+                            "id": trade.id,
+                            "ticket": trade.ticket,
+                            "symbol": trade.symbol,
+                            "trade_type": trade.trade_type,
+                            "volume": trade.volume,
+                            "open_price": trade.open_price,
+                            "close_price": trade.close_price,
+                            "open_time": trade.open_time.isoformat() if trade.open_time else None,
+                            "close_time": trade.close_time.isoformat() if trade.close_time else None,
+                            "profit": trade.profit,
+                            "is_open": False,
+                            "old_profit": old_profit,
+                            "old_is_open": old_is_open,
+                            "message": f"{trade.symbol} trade cleaned up - no longer in MT5"
+                        }
+                    }
+                    asyncio.create_task(manager.send_user_message(trade_data, user_id))
+                
+                # Send overall sync notification if there were changes
+                if new_trades or updated_trades or removed_trades:
+                    sync_data = {
+                        "type": "trades_synced",
+                        "data": {
+                            "new_trades": len(new_trades),
+                            "updated_trades": len(updated_trades),
+                            "removed_trades": len(removed_trades),
+                            "total_trades": len(all_trades),
+                            "message": f"Updated: {len(new_trades)} new, {len(updated_trades)} changed, {len(removed_trades)} cleaned"
+                        }
+                    }
+                    asyncio.create_task(manager.send_user_message(sync_data, user_id))
                     
             except Exception as e:
-                logger.error(f"Error sending WebSocket notification: {e}")
+                logger.error(f"Error sending WebSocket notifications: {e}")
             
         except Exception as e:
             logger.error(f"Error syncing trades to database: {e}")
@@ -354,7 +467,7 @@ class MT5Bridge:
                     })
                 
                 # Wait before next update
-                await asyncio.sleep(5)  # Update every 5 seconds
+                await asyncio.sleep(2)  # Update every 2 seconds for faster response
                 
             except Exception as e:
                 logger.error(f"Error in account monitoring: {e}")

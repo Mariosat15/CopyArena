@@ -15,6 +15,33 @@ export interface Trade {
   is_open: boolean
 }
 
+export interface AccountStats {
+  account: {
+    login: number | null
+    server: string | null
+    company: string | null
+    currency: string
+    balance: number
+    equity: number
+    margin: number
+    free_margin: number
+    margin_level: number
+  }
+  trading: {
+    total_trades: number
+    open_trades: number
+    closed_trades: number
+    historical_profit: number
+    floating_profit: number
+    total_profit: number
+    win_rate: number
+  }
+  status: {
+    mt5_connected: boolean
+    last_update: string
+  }
+}
+
 export interface Trader {
   id: number
   username: string
@@ -41,12 +68,14 @@ export interface Follow {
 
 interface TradingState {
   trades: Trade[]
+  accountStats: AccountStats | null
   traders: Trader[]
   follows: Follow[]
   leaderboard: Trader[]
   
   // Actions
   fetchTrades: () => Promise<void>
+  fetchAccountStats: () => Promise<void>
   fetchTraders: (filters?: any) => Promise<void>
   fetchLeaderboard: (sortBy?: string) => Promise<void>
   followTrader: (traderId: number, settings: Partial<Follow>) => Promise<void>
@@ -55,11 +84,13 @@ interface TradingState {
   // Real-time updates
   addTrade: (trade: Trade) => void
   updateTrade: (trade: Trade) => void
+  removeDuplicateTrades: () => void
   updateTraderStatus: (traderId: number, isOnline: boolean) => void
 }
 
 export const useTradingStore = create<TradingState>((set, get) => ({
   trades: [],
+  accountStats: null,
   traders: [],
   follows: [],
   leaderboard: [],
@@ -70,6 +101,15 @@ export const useTradingStore = create<TradingState>((set, get) => ({
       set({ trades: response.data })
     } catch (error) {
       console.error('Failed to fetch trades:', error)
+    }
+  },
+
+  fetchAccountStats: async () => {
+    try {
+      const response = await axios.get('/api/account/stats')
+      set({ accountStats: response.data })
+    } catch (error) {
+      console.error('Failed to fetch account stats:', error)
     }
   },
 
@@ -136,11 +176,50 @@ export const useTradingStore = create<TradingState>((set, get) => ({
   },
 
   updateTrade: (updatedTrade: Trade) => {
-    set(state => ({
-      trades: state.trades.map(trade => 
-        trade.id === updatedTrade.id ? updatedTrade : trade
-      )
-    }))
+    set(state => {
+      // First, find if this trade exists by ID
+      const existingTradeIndex = state.trades.findIndex(trade => trade.id === updatedTrade.id)
+      
+      if (existingTradeIndex !== -1) {
+        // Trade exists by ID, update it
+        const newTrades = [...state.trades]
+        newTrades[existingTradeIndex] = updatedTrade
+        return { trades: newTrades }
+      } else {
+        // Trade doesn't exist by ID, check by ticket (for duplicate cleanup)
+        const existingTicketIndex = state.trades.findIndex(trade => trade.ticket === updatedTrade.ticket)
+        
+        if (existingTicketIndex !== -1) {
+          // Found by ticket, update it
+          const newTrades = [...state.trades]
+          newTrades[existingTicketIndex] = updatedTrade
+          return { trades: newTrades }
+        } else {
+          // Trade doesn't exist, add it
+          return { trades: [updatedTrade, ...state.trades] }
+        }
+      }
+    })
+  },
+
+  // Add a new function to remove duplicate trades
+  removeDuplicateTrades: () => {
+    set(state => {
+      const uniqueTrades = state.trades.reduce((acc: Trade[], current) => {
+        const existingIndex = acc.findIndex(trade => trade.ticket === current.ticket)
+        if (existingIndex !== -1) {
+          // Keep the most recent one (higher ID or more recent update)
+          if (current.id > acc[existingIndex].id) {
+            acc[existingIndex] = current
+          }
+        } else {
+          acc.push(current)
+        }
+        return acc
+      }, [])
+      
+      return { trades: uniqueTrades }
+    })
   },
 
   updateTraderStatus: (traderId: number, isOnline: boolean) => {

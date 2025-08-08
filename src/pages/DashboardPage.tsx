@@ -4,19 +4,19 @@ import { useTradingStore } from '../stores/tradingStore'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
-import { TrendingUp, TrendingDown, Users, Trophy, Target, Zap, RefreshCw, Activity } from 'lucide-react'
+import { TrendingUp, TrendingDown, Users, Trophy, Target, Zap, RefreshCw, Activity, DollarSign, PieChart, Calculator } from 'lucide-react'
 import { formatCurrency, formatPercentage, getProgressToNextLevel } from '../lib/utils'
 
 export function DashboardPage() {
   const { user } = useAuthStore()
-  const { trades, fetchTrades } = useTradingStore()
+  const { trades, accountStats, fetchTrades, fetchAccountStats, removeDuplicateTrades } = useTradingStore()
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
   const [isRefreshing, setIsRefreshing] = useState(false)
 
   const handleRefresh = async () => {
     setIsRefreshing(true)
     try {
-      await fetchTrades()
+      await Promise.all([fetchTrades(), fetchAccountStats()])
       setLastUpdate(new Date())
     } finally {
       setIsRefreshing(false)
@@ -26,20 +26,22 @@ export function DashboardPage() {
   useEffect(() => {
     handleRefresh()
     
-    // Set up periodic refresh every 30 seconds
+    // Set up periodic refresh every 10 seconds
     const interval = setInterval(async () => {
-      await fetchTrades()
+      await Promise.all([fetchTrades(), fetchAccountStats()])
       setLastUpdate(new Date())
-    }, 30000)
+    }, 10000)
     
     return () => clearInterval(interval)
   }, [fetchTrades])
 
   if (!user) return null
 
-  const totalProfit = trades.reduce((sum, trade) => sum + trade.profit, 0)
-  const profitableTrades = trades.filter(trade => trade.profit > 0).length
-  const winRate = trades.length > 0 ? (profitableTrades / trades.length) * 100 : 0
+  // Use account stats if available, fallback to trade calculations
+  const totalProfit = accountStats?.trading.total_profit ?? trades.reduce((sum, trade) => sum + trade.profit, 0)
+  const historicalProfit = accountStats?.trading.historical_profit ?? trades.filter(t => !t.is_open).reduce((sum, trade) => sum + trade.profit, 0)
+  const floatingProfit = accountStats?.trading.floating_profit ?? trades.filter(t => t.is_open).reduce((sum, trade) => sum + trade.profit, 0)
+  const winRate = accountStats?.trading.win_rate ?? (trades.length > 0 ? (trades.filter(trade => trade.profit > 0).length / trades.length) * 100 : 0)
   const progressToNextLevel = getProgressToNextLevel(user.xp_points, user.level)
 
   return (
@@ -56,18 +58,84 @@ export function DashboardPage() {
           <div className="text-sm text-muted-foreground">
             Last update: {lastUpdate.toLocaleTimeString()}
           </div>
-          <Button onClick={handleRefresh} variant="outline" size="sm" disabled={isRefreshing}>
-            <RefreshCw className={`h-4 w-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
-            {isRefreshing ? 'Refreshing...' : 'Refresh Trades'}
-          </Button>
+                            <Button onClick={handleRefresh} variant="outline" size="sm" disabled={isRefreshing}>
+                    <RefreshCw className={`h-4 w-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
+                    {isRefreshing ? 'Refreshing...' : 'Refresh Trades'}
+                  </Button>
+                  <Button onClick={removeDuplicateTrades} variant="outline" size="sm">
+                    Remove Duplicates
+                  </Button>
         </div>
       </div>
 
-      {/* Stats Grid */}
+      {/* Account Overview Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Balance</CardTitle>
+            <DollarSign className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">
+              {formatCurrency(accountStats?.account.balance ?? 0)}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {accountStats?.account.currency ?? 'USD'} Account Balance
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Equity</CardTitle>
+            <PieChart className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">
+              {formatCurrency(accountStats?.account.equity ?? 0)}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Current Account Equity
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Free Margin</CardTitle>
+            <Calculator className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">
+              {formatCurrency(accountStats?.account.free_margin ?? 0)}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Available for Trading
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Margin Level</CardTitle>
+            <Target className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">
+              {accountStats?.account.margin_level.toFixed(1) ?? '0.0'}%
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Current Margin Level
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Trading Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Profit</CardTitle>
+            <CardTitle className="text-sm font-medium">Total Profit/Loss</CardTitle>
             <TrendingUp className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
@@ -75,7 +143,37 @@ export function DashboardPage() {
               {formatCurrency(totalProfit)}
             </div>
             <p className="text-xs text-muted-foreground">
-              From {trades.length} trades
+              Realized + Unrealized
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Historical P&L</CardTitle>
+            <Trophy className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className={`text-2xl font-bold ${historicalProfit >= 0 ? 'profit-text' : 'loss-text'}`}>
+              {formatCurrency(historicalProfit)}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              From closed trades
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Floating P&L</CardTitle>
+            <Activity className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className={`text-2xl font-bold ${floatingProfit >= 0 ? 'profit-text' : 'loss-text'}`}>
+              {formatCurrency(floatingProfit)}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              From open trades
             </p>
           </CardContent>
         </Card>
@@ -88,46 +186,22 @@ export function DashboardPage() {
           <CardContent>
             <div className="text-2xl font-bold">{winRate.toFixed(1)}%</div>
             <p className="text-xs text-muted-foreground">
-              {profitableTrades} winning trades
+              {accountStats?.trading.closed_trades ?? trades.filter(t => !t.is_open).length} closed trades
             </p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">XP Points</CardTitle>
-            <Zap className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-sm font-medium">Live Trades</CardTitle>
+            <Zap className="h-4 w-4 text-green-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{user.xp_points.toLocaleString()}</div>
-            <div className="text-xs text-muted-foreground">
-              Level {user.level} • {progressToNextLevel.toFixed(0)}% to next level
+            <div className="text-2xl font-bold text-green-600">
+              {accountStats?.trading.open_trades ?? trades.filter(t => t.is_open).length}
             </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Followers</CardTitle>
-            <Users className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{user.stats?.followers_count || 0}</div>
             <p className="text-xs text-muted-foreground">
-              People copying your trades
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Live Status</CardTitle>
-            <Activity className="h-4 w-4 text-green-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-600">Active</div>
-            <p className="text-xs text-muted-foreground">
-              Auto-sync every 30s
+              Currently open
             </p>
           </CardContent>
         </Card>
