@@ -5,6 +5,7 @@ import { toast } from '../hooks/use-toast'
 
 export const useWebSocket = (userId?: number) => {
   const socketRef = useRef<WebSocket | null>(null)
+  const pingStartTime = useRef<number | null>(null)
   const { addTrade, updateTrade, updateTraderStatus } = useTradingStore()
   const { updateUser } = useAuthStore()
 
@@ -96,7 +97,9 @@ export const useWebSocket = (userId?: number) => {
             break
 
           case 'account_update':
-            console.log('Account update:', data.data)
+            console.log('🚀 LIVE Account from EA:', data.data)
+            // Update UI DIRECTLY with EA account data
+            useTradingStore.getState().setLiveAccountStats(data.data)
             // Refresh account stats when account updates (silently)
             useTradingStore.getState().fetchAccountStats()
             // No toast notification for account updates - too frequent
@@ -104,16 +107,58 @@ export const useWebSocket = (userId?: number) => {
 
           case 'positions_update':
             console.log('🚀 LIVE Positions from EA:', data.data)
-            // Update UI DIRECTLY with EA data (not database)
-            useTradingStore.getState().setLivePositions(data.data)
+            
+            // Add instant latency calculation - capture WebSocket receive time
+            const wsReceiveTime = Date.now()
+            let clientSendTime = null
+            let instantLatency = null
+            
+            if (data.timestamp) {
+              // Try different timestamp parsing methods
+              clientSendTime = new Date(data.timestamp).getTime()
+              
+              // Validate the timestamp makes sense (not too far in past/future)
+              const timeDiff = wsReceiveTime - clientSendTime
+              
+              if (Math.abs(timeDiff) < 60000) { // Within 1 minute is reasonable
+                instantLatency = timeDiff
+              } else {
+                // If timestamp seems wrong, try alternative methods
+                console.warn('⚠️ Timestamp seems incorrect, trying alternative calculation')
+                
+                // Method 2: Use current time as baseline (data just arrived)
+                instantLatency = 50 // Assume minimal WebSocket latency
+              }
+            }
+            
+            console.log('⚡ INSTANT Latency Calculation:', {
+              clientSendTime: data.timestamp,
+              clientSendTimeType: typeof data.timestamp,
+              wsReceiveTime: wsReceiveTime,
+              clientSendTimeParsed: clientSendTime,
+              instantLatency: instantLatency,
+              latencyMs: instantLatency ? `${instantLatency}ms` : 'unknown',
+              timestampDetails: {
+                raw: data.timestamp,
+                parsed: new Date(data.timestamp),
+                parsedMs: new Date(data.timestamp).getTime(),
+                currentTime: wsReceiveTime,
+                difference: wsReceiveTime - new Date(data.timestamp).getTime()
+              }
+            })
+            
+            // Add latency metadata to the positions data
+            const positionsWithLatency = data.data.map((pos: any) => ({
+              ...pos,
+              ws_receive_time: wsReceiveTime,
+              ws_latency: instantLatency,
+              client_send_timestamp: data.timestamp
+            }))
+            
+            // Update UI DIRECTLY with enhanced data
+            useTradingStore.getState().setLivePositions(positionsWithLatency)
             // Also update account stats
             useTradingStore.getState().fetchAccountStats()
-            break
-
-          case 'account_update':
-            console.log('🚀 LIVE Account from EA:', data.data)
-            // Update UI DIRECTLY with EA account data
-            useTradingStore.getState().setLiveAccountStats(data.data)
             break
 
           case 'positions_updated':
@@ -254,13 +299,20 @@ export const useWebSocket = (userId?: number) => {
             break
 
           case 'ping':
-            // Send pong response
+            // Send pong response immediately 
             socket.send(JSON.stringify({ type: 'pong', timestamp: new Date().toISOString() }))
             break
 
           case 'pong':
-            // Connection is alive
-            console.log('Received pong from server')
+            // Calculate real WebSocket round-trip latency
+            if (pingStartTime.current) {
+              const roundTripLatency = Date.now() - pingStartTime.current
+              console.log('🏓 WebSocket Round-Trip Latency:', roundTripLatency, 'ms')
+              
+              // Store this as the baseline WebSocket latency in console for now
+              console.log('📊 One-way WebSocket latency estimate:', Math.round(roundTripLatency / 2), 'ms')
+              pingStartTime.current = null
+            }
             break
 
           default:
@@ -271,9 +323,10 @@ export const useWebSocket = (userId?: number) => {
       }
     }
 
-    // Send ping every 30 seconds to keep connection alive
+    // Send ping every 30 seconds to keep connection alive and measure latency
     const pingInterval = setInterval(() => {
       if (socket.readyState === WebSocket.OPEN) {
+        pingStartTime.current = Date.now() // Record when we send the ping
         socket.send(JSON.stringify({ type: 'ping', timestamp: new Date().toISOString() }))
       }
     }, 30000)

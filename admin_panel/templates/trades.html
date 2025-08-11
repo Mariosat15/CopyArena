@@ -1,0 +1,444 @@
+{% extends "base.html" %}
+
+{% block title %}Trades - CopyArena Admin{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">
+        <i class="fas fa-chart-bar"></i>
+        Trading Activity
+    </h1>
+    <div style="display: flex; gap: 1rem; align-items: center;">
+        <span class="badge badge-primary">{{ pagination.total }} Total</span>
+        <span class="badge badge-open">{{ open_count }} Open</span>
+        <span class="badge badge-closed">{{ closed_count }} Closed</span>
+    </div>
+</div>
+
+<!-- Filters -->
+<div class="card">
+    <h3 style="margin-bottom: 1.5rem; color: hsl(var(--foreground)); display: flex; align-items: center; gap: 0.75rem;">
+        <i class="fas fa-filter" style="color: hsl(var(--primary));"></i>
+        Filters
+    </h3>
+    
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+        <a href="?status=all" class="btn {{ 'btn-primary' if status_filter == 'all' else 'btn-outline' }}">
+            <i class="fas fa-list" style="margin-right: 0.5rem;"></i>
+            All Trades
+        </a>
+        <a href="?status=open" class="btn {{ 'btn-primary' if status_filter == 'open' else 'btn-outline' }}">
+            <i class="fas fa-play-circle" style="margin-right: 0.5rem;"></i>
+            Open Only
+        </a>
+        <a href="?status=closed" class="btn {{ 'btn-primary' if status_filter == 'closed' else 'btn-outline' }}">
+            <i class="fas fa-stop-circle" style="margin-right: 0.5rem;"></i>
+            Closed Only
+        </a>
+        <a href="?trade_type=buy" class="btn {{ 'btn-primary' if trade_type_filter == 'buy' else 'btn-outline' }}">
+            <i class="fas fa-arrow-up" style="margin-right: 0.5rem;"></i>
+            Buy Orders
+        </a>
+        <a href="?trade_type=sell" class="btn {{ 'btn-primary' if trade_type_filter == 'sell' else 'btn-outline' }}">
+            <i class="fas fa-arrow-down" style="margin-right: 0.5rem;"></i>
+            Sell Orders
+        </a>
+    </div>
+</div>
+
+<!-- Trades Table -->
+<div class="table-container">
+    <table class="table">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Trader</th>
+                <th>Symbol</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Volume</th>
+                <th>Entry Price</th>
+                <th>Live Price / Exit</th>
+                <th>P&L</th>
+                <th>Duration</th>
+                <th>Opened</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for trade in trades %}
+            <tr>
+                <td>
+                    <div style="display: flex; flex-direction: column;">
+                        <strong style="color: hsl(var(--foreground));">#{{ trade.ticket }}</strong>
+                        <small style="color: hsl(var(--muted-foreground)); font-size: 0.7rem;">DB: {{ trade.id }}</small>
+                    </div>
+                </td>
+                <td>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <i class="fas fa-user-circle" style="color: hsl(var(--primary));"></i>
+                        <div>
+                            <strong>{{ trade.user.username }}</strong>
+                            <!-- Real-time online status -->
+                            <div id="trader-status-{{ trade.user.id }}" style="display: flex; align-items: center; gap: 0.25rem; margin-top: 0.25rem;">
+                                <span class="status-offline"></span>
+                                <small style="color: hsl(var(--muted-foreground)); font-weight: 600;">Offline</small>
+                            </div>
+                        </div>
+                    </div>
+                </td>
+                <td>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <i class="fas fa-coins" style="color: hsl(var(--warning));"></i>
+                        <strong style="font-family: 'Courier New', monospace; font-size: 0.875rem;">{{ trade.symbol }}</strong>
+                    </div>
+                </td>
+                <td>
+                    {% if trade.trade_type.lower() == 'buy' %}
+                        <span class="badge badge-buy">
+                            <i class="fas fa-arrow-up" style="margin-right: 0.25rem;"></i>
+                            BUY
+                        </span>
+                    {% elif trade.trade_type.lower() == 'sell' %}
+                        <span class="badge badge-sell">
+                            <i class="fas fa-arrow-down" style="margin-right: 0.25rem;"></i>
+                            SELL
+                        </span>
+                    {% else %}
+                        <span class="badge badge-secondary">{{ trade.trade_type.upper() }}</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if trade.status == 'open' %}
+                        <span class="badge badge-open">
+                            <i class="fas fa-play-circle" style="margin-right: 0.25rem;"></i>
+                            OPEN
+                        </span>
+                    {% else %}
+                        <span class="badge badge-closed">
+                            <i class="fas fa-stop-circle" style="margin-right: 0.25rem;"></i>
+                            CLOSED
+                        </span>
+                    {% endif %}
+                </td>
+                <td>
+                    <span style="font-family: 'Courier New', monospace; font-weight: 600; color: hsl(var(--info));">
+                        {{ "%.2f"|format(trade.volume) }}
+                    </span>
+                </td>
+                <td>
+                    <span style="font-family: 'Courier New', monospace; font-weight: 600;">
+                        {{ "%.5f"|format(trade.open_price) }}
+                    </span>
+                </td>
+                <td>
+                    <span style="font-family: 'Courier New', monospace; font-weight: 600;">
+                        {% if trade.status == 'open' %}
+                            <!-- Open trade: Show current price if available -->
+                            {% if trade.current_price and trade.current_price > 0 and trade.current_price != trade.open_price %}
+                                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <i class="fas fa-chart-line" style="color: hsl(var(--info)); font-size: 0.75rem;"></i>
+                                    <span style="color: hsl(var(--info));">{{ "%.5f"|format(trade.current_price) }}</span>
+                                    <small style="color: hsl(var(--muted-foreground)); font-size: 0.7rem;">(Live)</small>
+                                </div>
+                            {% elif trade.current_price and trade.current_price > 0 %}
+                                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <i class="fas fa-equals" style="color: hsl(var(--warning)); font-size: 0.75rem;"></i>
+                                    <span style="color: hsl(var(--warning));">{{ "%.5f"|format(trade.current_price) }}</span>
+                                    <small style="color: hsl(var(--muted-foreground)); font-size: 0.7rem;">(Same)</small>
+                                </div>
+                            {% else %}
+                                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <i class="fas fa-clock" style="color: hsl(var(--muted-foreground)); font-size: 0.75rem;"></i>
+                                    <span style="color: hsl(var(--muted-foreground));">Market Closed</span>
+                                </div>
+                            {% endif %}
+                        {% else %}
+                            <!-- Closed trade: ALWAYS show close_price, never current_price -->
+                            {% if trade.close_price and trade.close_price != trade.open_price %}
+                                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <i class="fas fa-flag-checkered" style="color: hsl(var(--success)); font-size: 0.75rem;"></i>
+                                    <span style="color: hsl(var(--success));">{{ "%.5f"|format(trade.close_price) }}</span>
+                                    <small style="color: hsl(var(--muted-foreground)); font-size: 0.7rem;">(Exit)</small>
+                                </div>
+                            {% elif trade.close_price and trade.close_price == trade.open_price %}
+                                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <i class="fas fa-exclamation-triangle" style="color: hsl(var(--warning)); font-size: 0.75rem;"></i>
+                                    <span style="color: hsl(var(--warning));">{{ "%.5f"|format(trade.close_price) }}</span>
+                                    <small style="color: hsl(var(--warning)); font-size: 0.7rem;">(Same as Entry)</small>
+                                </div>
+                            {% elif trade.close_price %}
+                                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <i class="fas fa-flag-checkered" style="color: hsl(var(--muted-foreground)); font-size: 0.75rem;"></i>
+                                    <span style="color: hsl(var(--muted-foreground));">{{ "%.5f"|format(trade.close_price) }}</span>
+                                    <small style="color: hsl(var(--muted-foreground)); font-size: 0.7rem;">(Exit)</small>
+                                </div>
+                            {% else %}
+                                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <i class="fas fa-question-circle" style="color: hsl(var(--muted-foreground)); font-size: 0.75rem;"></i>
+                                    <span style="color: hsl(var(--muted-foreground));">No Exit Data</span>
+                                </div>
+                            {% endif %}
+                        {% endif %}
+                    </span>
+                </td>
+                <td>
+                    {% if trade.status == 'open' %}
+                        <!-- Fix: Show unrealized profit or fallback calculation -->
+                        {% if trade.unrealized_profit is not none %}
+                            {% if trade.unrealized_profit >= 0 %}
+                                <div style="display: flex; align-items: center; gap: 0.25rem;">
+                                    <i class="fas fa-arrow-up" style="color: hsl(var(--success)); font-size: 0.75rem;"></i>
+                                    <span style="color: hsl(var(--success)); font-weight: 700; font-family: 'Courier New', monospace;">
+                                        ${{ "%.2f"|format(trade.unrealized_profit) }}
+                                    </span>
+                                </div>
+                            {% else %}
+                                <div style="display: flex; align-items: center; gap: 0.25rem;">
+                                    <i class="fas fa-arrow-down" style="color: hsl(var(--danger)); font-size: 0.75rem;"></i>
+                                    <span style="color: hsl(var(--danger)); font-weight: 700; font-family: 'Courier New', monospace;">
+                                        -${{ "%.2f"|format(-trade.unrealized_profit) }}
+                                    </span>
+                                </div>
+                            {% endif %}
+                        {% elif trade.current_price and trade.current_price > 0 %}
+                            <!-- Fallback: Calculate basic P&L if unrealized_profit is None -->
+                            {% set price_diff = trade.current_price - trade.open_price %}
+                            {% set direction_multiplier = 1 if trade.trade_type.lower() == 'buy' else -1 %}
+                            {% set estimated_profit = price_diff * direction_multiplier * trade.volume * 100000 %}
+                            {% if estimated_profit >= 0 %}
+                                <div style="display: flex; align-items: center; gap: 0.25rem;">
+                                    <i class="fas fa-calculator" style="color: hsl(var(--success)); font-size: 0.75rem;"></i>
+                                    <span style="color: hsl(var(--success)); font-weight: 700; font-family: 'Courier New', monospace;">
+                                        ~${{ "%.2f"|format(estimated_profit) }}
+                                    </span>
+                                </div>
+                            {% else %}
+                                <div style="display: flex; align-items: center; gap: 0.25rem;">
+                                    <i class="fas fa-calculator" style="color: hsl(var(--danger)); font-size: 0.75rem;"></i>
+                                    <span style="color: hsl(var(--danger)); font-weight: 700; font-family: 'Courier New', monospace;">
+                                        ~-${{ "%.2f"|format(-estimated_profit) }}
+                                    </span>
+                                </div>
+                            {% endif %}
+                        {% else %}
+                            <span style="color: hsl(var(--muted-foreground)); font-style: italic;">
+                                <i class="fas fa-clock" style="margin-right: 0.25rem;"></i>
+                                Market Closed
+                            </span>
+                        {% endif %}
+                    {% else %}
+                        <!-- Closed trade P&L -->
+                        {% if trade.realized_profit is not none %}
+                            {% if trade.realized_profit >= 0 %}
+                                <div style="display: flex; align-items: center; gap: 0.25rem;">
+                                    <i class="fas fa-check-circle" style="color: hsl(var(--success)); font-size: 0.75rem;"></i>
+                                    <span style="color: hsl(var(--success)); font-weight: 700; font-family: 'Courier New', monospace;">
+                                        ${{ "%.2f"|format(trade.realized_profit) }}
+                                    </span>
+                                </div>
+                            {% else %}
+                                <div style="display: flex; align-items: center; gap: 0.25rem;">
+                                    <i class="fas fa-times-circle" style="color: hsl(var(--danger)); font-size: 0.75rem;"></i>
+                                    <span style="color: hsl(var(--danger)); font-weight: 700; font-family: 'Courier New', monospace;">
+                                        -${{ "%.2f"|format(-trade.realized_profit) }}
+                                    </span>
+                                </div>
+                            {% endif %}
+                        {% else %}
+                            <span style="color: hsl(var(--muted-foreground));">$0.00</span>
+                        {% endif %}
+                    {% endif %}
+                </td>
+                <td>
+                    {% if trade.status == 'open' and trade.open_time %}
+                        {% set duration_seconds = (now - trade.open_time).total_seconds() %}
+                        {% if duration_seconds < 60 %}
+                            <span class="badge badge-info" style="font-size: 0.7rem;">
+                                <i class="fas fa-clock" style="margin-right: 0.25rem;"></i>
+                                {{ "%.0f"|format(duration_seconds) }}s
+                            </span>
+                        {% elif duration_seconds < 3600 %}
+                            <span class="badge badge-info" style="font-size: 0.7rem;">
+                                <i class="fas fa-clock" style="margin-right: 0.25rem;"></i>
+                                {{ "%.0f"|format(duration_seconds / 60) }}m
+                            </span>
+                        {% elif duration_seconds < 86400 %}
+                            <span class="badge badge-warning" style="font-size: 0.7rem;">
+                                <i class="fas fa-clock" style="margin-right: 0.25rem;"></i>
+                                {{ "%.1f"|format(duration_seconds / 3600) }}h
+                            </span>
+                        {% else %}
+                            <span class="badge badge-danger" style="font-size: 0.7rem;">
+                                <i class="fas fa-calendar" style="margin-right: 0.25rem;"></i>
+                                {{ "%.0f"|format(duration_seconds / 86400) }}d
+                            </span>
+                        {% endif %}
+                    {% elif trade.close_time and trade.open_time %}
+                        {% set duration_seconds = (trade.close_time - trade.open_time).total_seconds() %}
+                        {% if duration_seconds < 60 %}
+                            <span class="badge badge-secondary" style="font-size: 0.7rem;">
+                                {{ "%.0f"|format(duration_seconds) }}s
+                            </span>
+                        {% elif duration_seconds < 3600 %}
+                            <span class="badge badge-secondary" style="font-size: 0.7rem;">
+                                {{ "%.0f"|format(duration_seconds / 60) }}m
+                            </span>
+                        {% elif duration_seconds < 86400 %}
+                            <span class="badge badge-secondary" style="font-size: 0.7rem;">
+                                {{ "%.1f"|format(duration_seconds / 3600) }}h
+                            </span>
+                        {% else %}
+                            <span class="badge badge-secondary" style="font-size: 0.7rem;">
+                                {{ "%.0f"|format(duration_seconds / 86400) }}d
+                            </span>
+                        {% endif %}
+                    {% else %}
+                        <span class="badge badge-secondary" style="font-size: 0.7rem;">--</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <div style="display: flex; flex-direction: column;">
+                        <small style="color: hsl(var(--foreground)); font-weight: 600;">
+                            {{ trade.open_time.strftime('%Y-%m-%d') if trade.open_time else 'Unknown' }}
+                        </small>
+                        <small style="color: hsl(var(--muted-foreground)); font-size: 0.7rem;">
+                            {{ trade.open_time.strftime('%H:%M:%S') if trade.open_time else '--:--:--' }}
+                        </small>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{% if pagination.pages > 1 %}
+<!-- Enhanced Pagination -->
+<div style="display: flex; justify-content: center; margin-top: 2rem;">
+    <div style="display: flex; gap: 0.5rem; align-items: center; background: linear-gradient(135deg, hsl(var(--card)) 0%, hsl(222.2 84% 5.5%) 100%); padding: 1rem; border-radius: 1rem; border: 1px solid hsl(var(--border));">
+        {% if pagination.page > 1 %}
+            <a href="?page={{ pagination.page - 1 }}&status={{ status_filter }}&trade_type={{ trade_type_filter }}" class="btn btn-outline btn-sm">
+                <i class="fas fa-chevron-left"></i>
+                Previous
+            </a>
+        {% endif %}
+        
+        {% for page in range(1, pagination.pages + 1) %}
+            {% if page == pagination.page %}
+                <span class="btn btn-primary btn-sm">{{ page }}</span>
+            {% elif page <= 3 or page >= pagination.pages - 2 or (page >= pagination.page - 1 and page <= pagination.page + 1) %}
+                <a href="?page={{ page }}&status={{ status_filter }}&trade_type={{ trade_type_filter }}" class="btn btn-outline btn-sm">{{ page }}</a>
+            {% elif page == 4 or page == pagination.pages - 3 %}
+                <span class="btn btn-outline btn-sm" style="cursor: default; opacity: 0.6;">...</span>
+            {% endif %}
+        {% endfor %}
+        
+        {% if pagination.page < pagination.pages %}
+            <a href="?page={{ pagination.page + 1 }}&status={{ status_filter }}&trade_type={{ trade_type_filter }}" class="btn btn-outline btn-sm">
+                Next
+                <i class="fas fa-chevron-right"></i>
+            </a>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Live Statistics -->
+<div class="card">
+    <h3 style="margin-bottom: 1.5rem; color: hsl(var(--foreground)); display: flex; align-items: center; gap: 0.75rem;">
+        <i class="fas fa-chart-line" style="color: hsl(var(--primary));"></i>
+        Live Statistics
+    </h3>
+    
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem;">
+        <div style="text-align: center; padding: 1rem; background: linear-gradient(135deg, hsla(var(--buy-color), 0.1), hsla(var(--buy-color), 0.05)); border-radius: 0.75rem; border: 1px solid hsla(var(--buy-color), 0.2);">
+            <div style="color: hsl(var(--buy-color)); font-size: 2rem; font-weight: 700;">{{ buy_count }}</div>
+            <div style="color: hsl(var(--muted-foreground)); font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.05em;">Buy Orders</div>
+        </div>
+        
+        <div style="text-align: center; padding: 1rem; background: linear-gradient(135deg, hsla(var(--sell-color), 0.1), hsla(var(--sell-color), 0.05)); border-radius: 0.75rem; border: 1px solid hsla(var(--sell-color), 0.2);">
+            <div style="color: hsl(var(--sell-color)); font-size: 2rem; font-weight: 700;">{{ sell_count }}</div>
+            <div style="color: hsl(var(--muted-foreground)); font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.05em;">Sell Orders</div>
+        </div>
+        
+        <div style="text-align: center; padding: 1rem; background: linear-gradient(135deg, hsla(var(--success), 0.1), hsla(var(--success), 0.05)); border-radius: 0.75rem; border: 1px solid hsla(var(--success), 0.2);">
+            <div style="color: hsl(var(--success)); font-size: 2rem; font-weight: 700;">{{ profitable_trades }}</div>
+            <div style="color: hsl(var(--muted-foreground)); font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.05em;">Profitable</div>
+        </div>
+        
+        <div style="text-align: center; padding: 1rem; background: linear-gradient(135deg, hsla(var(--primary), 0.1), hsla(var(--primary), 0.05)); border-radius: 0.75rem; border: 1px solid hsla(var(--primary), 0.2);">
+            <div style="color: hsl(var(--primary)); font-size: 2rem; font-weight: 700;">{{ total_volume }}</div>
+            <div style="color: hsl(var(--muted-foreground)); font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.05em;">Total Volume</div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Real-time online status updates for traders
+async function updateTraderOnlineStatus() {
+    try {
+        const response = await fetch('/api/online-status');
+        if (response.ok) {
+            const data = await response.json();
+            const onlineUsers = new Set(data.online_users);
+            
+            // Update all trader status indicators
+            document.querySelectorAll('[id^="trader-status-"]').forEach(statusDiv => {
+                const userId = parseInt(statusDiv.id.replace('trader-status-', ''));
+                const dot = statusDiv.querySelector('span[class*="status-"]');
+                const text = statusDiv.querySelector('small');
+                
+                if (onlineUsers.has(userId)) {
+                    dot.className = 'status-online';
+                    text.textContent = 'Online';
+                    text.style.color = 'hsl(var(--success))';
+                    text.style.fontWeight = '600';
+                } else {
+                    dot.className = 'status-offline';
+                    text.textContent = 'Offline';
+                    text.style.color = 'hsl(var(--muted-foreground))';
+                    text.style.fontWeight = '600';
+                }
+            });
+        }
+    } catch (error) {
+        console.error('Failed to update trader online status:', error);
+    }
+}
+
+// Auto-refresh trades every 15 seconds for open positions
+setInterval(function() {
+    if (window.location.href.includes('status=open') || window.location.href.includes('status=all')) {
+        showRefreshIndicator();
+        
+        // Only refresh if we're showing open trades
+        setTimeout(() => {
+            window.location.reload();
+        }, 500);
+    }
+}, 15000);
+
+// Update trader online status every 3 seconds
+updateTraderOnlineStatus();
+setInterval(updateTraderOnlineStatus, 3000);
+
+// Enhanced table interactions
+document.addEventListener('DOMContentLoaded', function() {
+    const rows = document.querySelectorAll('.table tbody tr');
+    rows.forEach((row, index) => {
+        row.style.animation = `fadeIn 0.4s ease-out ${index * 0.05}s both`;
+        
+        // Add click effect
+        row.addEventListener('click', function() {
+            this.style.transform = 'scale(0.98)';
+            setTimeout(() => {
+                this.style.transform = 'scale(1)';
+            }, 150);
+        });
+    });
+    
+    // Initial trader status update
+    updateTraderOnlineStatus();
+});
+</script>
+{% endblock %} 

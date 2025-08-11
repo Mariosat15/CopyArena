@@ -1,0 +1,310 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - CopyArena Admin{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">
+        <i class="fas fa-tachometer-alt"></i>
+        Dashboard
+    </h1>
+</div>
+
+<!-- Stats Grid -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-header">
+            <div class="stat-title">Total Users</div>
+            <i class="fas fa-users stat-icon"></i>
+        </div>
+        <div class="stat-value" data-stat="users.total">{{ stats.users.total }}</div>
+        <div class="stat-change positive">{{ stats.users.active }} active</div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-header">
+            <div class="stat-title">Online Users</div>
+            <i class="fas fa-circle stat-icon" style="color: #10b981;"></i>
+        </div>
+        <div class="stat-value" data-stat="users.online">{{ stats.users.online }}</div>
+        <div class="stat-change">Live connections</div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-header">
+            <div class="stat-title">Master Traders</div>
+            <i class="fas fa-crown stat-icon" style="color: #ffd700;"></i>
+        </div>
+        <div class="stat-value" data-stat="users.master_traders" style="color: #b45309;">{{ stats.users.master_traders }}</div>
+        <div class="stat-change" style="color: #d97706;">Marketplace enabled</div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-header">
+            <div class="stat-title">Active Followers</div>
+            <i class="fas fa-users stat-icon" style="color: #10b981;"></i>
+        </div>
+        <div class="stat-value" data-stat="follows.active_followers" style="color: #059669;">{{ stats.follows.active_followers }}</div>
+        <div class="stat-change" style="color: #065f46;">Copy trading investors</div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-header">
+            <div class="stat-title">Total Trades</div>
+            <i class="fas fa-chart-line stat-icon"></i>
+        </div>
+        <div class="stat-value" data-stat="trades.total">{{ stats.trades.total }}</div>
+        <div class="stat-change">{{ stats.trades.open }} open positions</div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-header">
+            <div class="stat-title">Security Status</div>
+            {% if stats.security.integrity_ok %}
+                <i class="fas fa-shield-alt stat-icon" style="color: #10b981;"></i>
+            {% else %}
+                <i class="fas fa-shield-alt stat-icon" style="color: #ef4444;"></i>
+            {% endif %}
+        </div>
+        <div class="stat-value">
+            {% if stats.security.integrity_ok %}SECURE{% else %}ALERT{% endif %}
+        </div>
+        <div class="stat-change {% if stats.security.integrity_ok %}positive{% else %}negative{% endif %}">
+            Database integrity {% if stats.security.integrity_ok %}verified{% else %}issues detected{% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- Top Traders -->
+<div class="card">
+    <h3 style="margin-bottom: 1.5rem; color: hsl(var(--foreground)); display: flex; align-items: center; gap: 0.75rem;">
+        <i class="fas fa-trophy" style="color: hsl(var(--primary));"></i>
+        Top Traders
+    </h3>
+    
+    {% if top_traders %}
+    <div class="table-container">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Rank</th>
+                    <th>Trader</th>
+                    <th>Trades</th>
+                    <th>Total Profit</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for trader in top_traders %}
+                <tr>
+                    <td>
+                        <span class="badge badge-primary">#{{ loop.index }}</span>
+                    </td>
+                    <td>
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            {% if trader.user.is_master_trader %}
+                                <i class="fas fa-crown" style="color: #ffd700; margin-right: 0.25rem;"></i>
+                            {% endif %}
+                            <i class="fas fa-user-circle" style="color: hsl(var(--primary));"></i>
+                            <strong {% if trader.user.is_master_trader %}style="color: #b45309;"{% endif %}>
+                                {{ trader.user.username }}
+                                {% if trader.user.is_master_trader %}
+                                    <small style="color: #d97706; font-weight: 600; margin-left: 0.25rem;">(Master)</small>
+                                {% endif %}
+                            </strong>
+                            {% if trader.user.is_online %}
+                                <span class="status-online"></span>
+                            {% else %}
+                                <span class="status-offline"></span>
+                            {% endif %}
+                        </div>
+                    </td>
+                    <td>
+                        <span class="badge badge-secondary">{{ trader.trade_count }}</span>
+                        {% if trader.open_trades > 0 %}
+                            <span class="badge badge-warning" style="margin-left: 0.5rem;">{{ trader.open_trades }} open</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if trader.total_profit >= 0 %}
+                            <span style="color: #10b981; font-weight: 600;">${{ "%.2f"|format(trader.total_profit) }}</span>
+                        {% else %}
+                            <span style="color: #ef4444; font-weight: 600;">-${{ "%.2f"|format(-trader.total_profit) }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if trader.user.is_active %}
+                            <span class="badge badge-success">Active</span>
+                        {% else %}
+                            <span class="badge badge-danger">Suspended</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div style="text-align: center; padding: 2rem; color: hsl(var(--muted-foreground));">
+        <i class="fas fa-chart-line" style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.5;"></i>
+        <p>No trading data available yet</p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Quick Actions -->
+<div class="card">
+    <h3 style="margin-bottom: 1.5rem; color: hsl(var(--foreground)); display: flex; align-items: center; gap: 0.75rem;">
+        <i class="fas fa-bolt" style="color: hsl(var(--primary));"></i>
+        Quick Actions
+    </h3>
+    
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+        <button class="btn btn-primary" onclick="createBackup()">
+            <i class="fas fa-download" style="margin-right: 0.5rem;"></i>
+            Create Backup
+        </button>
+        
+        <button class="btn btn-outline" onclick="runIntegrityCheck()" id="integrity-btn">
+            <i class="fas fa-check" style="margin-right: 0.5rem;"></i>
+            Run Integrity Check
+        </button>
+        
+        <a href="/users" class="btn btn-outline">
+            <i class="fas fa-users" style="margin-right: 0.5rem;"></i>
+            Manage Users
+        </a>
+        
+        <a href="/trades" class="btn btn-outline">
+            <i class="fas fa-chart-bar" style="margin-right: 0.5rem;"></i>
+            View Trades
+        </a>
+    </div>
+</div>
+
+<!-- System Information -->
+<div class="card">
+    <h3 style="margin-bottom: 1.5rem; color: hsl(var(--foreground)); display: flex; align-items: center; gap: 0.75rem;">
+        <i class="fas fa-server" style="color: hsl(var(--primary));"></i>
+        System Information
+    </h3>
+    
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.5rem;">
+        <div>
+            <div style="color: hsl(var(--muted-foreground)); font-size: 0.875rem; margin-bottom: 0.5rem;">Database</div>
+            <div style="color: hsl(var(--foreground)); font-weight: 600;">{{ system_info.database_path }}</div>
+        </div>
+        
+        <div>
+            <div style="color: hsl(var(--muted-foreground)); font-size: 0.875rem; margin-bottom: 0.5rem;">Last Backup</div>
+            <div style="color: hsl(var(--foreground)); font-weight: 600;">
+                {% if system_info.last_backup %}
+                    {{ system_info.last_backup.strftime('%Y-%m-%d %H:%M') }}
+                {% else %}
+                    Never
+                {% endif %}
+            </div>
+        </div>
+        
+        <div>
+            <div style="color: hsl(var(--muted-foreground)); font-size: 0.875rem; margin-bottom: 0.5rem;">Server Status</div>
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <span class="status-online"></span>
+                <span style="color: #10b981; font-weight: 600;">Running</span>
+            </div>
+        </div>
+        
+        <div>
+            <div style="color: hsl(var(--muted-foreground)); font-size: 0.875rem; margin-bottom: 0.5rem;">Auto Refresh</div>
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <span class="status-online"></span>
+                <span style="color: #10b981; font-weight: 600;">Every 30s</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Auto-refresh stats every 30 seconds
+setInterval(function() {
+    showRefreshIndicator();
+    
+    fetch('/api/stats')
+        .then(response => response.json())
+        .then(data => {
+            // Update stat values
+            const statElements = document.querySelectorAll('[data-stat]');
+            statElements.forEach(element => {
+                const statPath = element.dataset.stat.split('.');
+                let value = data;
+                for (let path of statPath) {
+                    value = value[path];
+                }
+                if (value !== undefined) {
+                    element.textContent = value;
+                }
+            });
+            
+            setTimeout(hideRefreshIndicator, 1000);
+        })
+        .catch(error => {
+            console.error('Failed to refresh stats:', error);
+            hideRefreshIndicator();
+        });
+}, 30000);
+
+// Function to create backup
+function createBackup() {
+    const button = event.target;
+    const originalContent = button.innerHTML;
+    button.disabled = true;
+    button.innerHTML = '<i class="fas fa-spinner fa-spin" style="margin-right: 0.5rem;"></i>Creating...';
+    
+    fetch('/api/create_backup', {method: 'POST'})
+        .then(response => response.json())
+        .then(data => {
+            button.disabled = false;
+            button.innerHTML = originalContent;
+            
+            if (data.success) {
+                showToast('Success', `Backup created: ${data.backup.filename}`, 'success');
+            } else {
+                showToast('Error', `Backup failed: ${data.error}`, 'error');
+            }
+        })
+        .catch(error => {
+            button.disabled = false;
+            button.innerHTML = originalContent;
+            showToast('Error', 'Network error occurred', 'error');
+        });
+}
+
+// Function to run integrity check
+function runIntegrityCheck() {
+    const button = document.getElementById('integrity-btn');
+    const originalContent = button.innerHTML;
+    button.disabled = true;
+    button.innerHTML = '<i class="fas fa-spinner fa-spin" style="margin-right: 0.5rem;"></i>Checking...';
+    
+    fetch('/api/integrity_check', {method: 'POST'})
+        .then(response => response.json())
+        .then(data => {
+            button.disabled = false;
+            button.innerHTML = originalContent;
+            
+            if (data.success) {
+                const status = data.integrity_ok ? 'PASSED' : 'FAILED';
+                const type = data.integrity_ok ? 'success' : 'error';
+                showToast('Integrity Check', `Database integrity check: ${status}`, type);
+            } else {
+                showToast('Error', `Check failed: ${data.error}`, 'error');
+            }
+        })
+        .catch(error => {
+            button.disabled = false;
+            button.innerHTML = originalContent;
+            showToast('Error', 'Network error occurred', 'error');
+        });
+}
+</script>
+{% endblock %} 

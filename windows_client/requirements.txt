@@ -1,0 +1,17 @@
+# CopyArena Windows Client Requirements
+
+# Core dependencies
+requests>=2.28.0
+urllib3>=1.26.0
+MetaTrader5>=5.0.45
+
+# GUI (tkinter is included with Python)
+# No additional GUI dependencies needed
+
+# Packaging (for creating executable)
+pyinstaller>=5.0
+cx-Freeze>=6.0  # Alternative to pyinstaller
+
+# Development
+pytest>=7.0.0  # For testing
+black>=22.0.0  # Code formatting

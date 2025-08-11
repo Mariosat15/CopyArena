@@ -28,7 +28,7 @@ try {
 }
 
 # Check if there are changes to commit
-$changes = git diff --cached --quiet
+git diff --cached --quiet
 if ($LASTEXITCODE -eq 0) {
     Write-Host "No changes to commit. Repository is up to date." -ForegroundColor Green
     Write-Host ""

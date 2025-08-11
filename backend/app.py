@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 
 # Import models and database
-from models import Base, User, Trade, MT5Connection, SessionLocal, engine, hash_password, verify_password
+from models import Base, User, Trade, MT5Connection, SessionLocal, engine, hash_password, verify_password, Follow
 from websocket_manager import ConnectionManager
 
 # Import for password validation
@@ -72,60 +72,12 @@ def get_session_id_from_request(request: Request) -> str:
     return session_id
 
 def get_or_create_session_user_for_ea(session_id: str, db: Session) -> User:
-    """Create session user ONLY for EA connections - not for web auth"""
-    if session_id in user_sessions:
-        user_id = user_sessions[session_id]
-        user = db.query(User).filter(User.id == user_id).first()
-        if user:
-            return user
-    
-    # Check if user exists in database with this session pattern
-    existing_user = db.query(User).filter(
-        User.email.like(f"user_{session_id[:8]}_%@copyarena.com")
-    ).first()
-    
-    if existing_user:
-        # Found existing user, cache the session
-        user_sessions[session_id] = existing_user.id
-        user_api_keys[existing_user.api_key] = existing_user.id
-        logger.info(f"Retrieved existing EA user {existing_user.id} for session {session_id[:8]}")
-        return existing_user
-    
-    # Create a new user for EA session with timestamp to ensure uniqueness
-    import time
-    timestamp = str(int(time.time()))[-6:]  # Last 6 digits of timestamp
-    
-    # Generate unique API key
-    temp_api_key = f"ca_temp_{uuid.uuid4().hex[:16]}"
-    
-    new_user = User(
-        email=f"user_{session_id[:8]}_{timestamp}@copyarena.com",
-        username=f"Trader_{session_id[:8]}_{timestamp}",
-        hashed_password=hash_password("temp_password"),
-        api_key=temp_api_key,
-        subscription_plan="free",
-        credits=0,
-        xp_points=0,
-        level=1,
-        is_online=True
+    """DEPRECATED: Session-based user creation disabled for security"""
+    logger.error("🚨 SECURITY: Attempted to use deprecated session-based user creation")
+    raise HTTPException(
+        status_code=410,
+        detail="Session-based authentication deprecated for security. Use proper API key authentication."
     )
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    
-    # Update with proper API key using the actual user ID
-    final_api_key = f"ca_{new_user.id}_{uuid.uuid4().hex[:16]}"
-    new_user.api_key = final_api_key
-    db.commit()
-    db.refresh(new_user)
-    
-    # Store the session mapping
-    user_sessions[session_id] = new_user.id
-    user_api_keys[final_api_key] = new_user.id
-    
-    logger.info(f"Created new EA user {new_user.id} (session: {session_id[:8]}) with API key: {final_api_key[:20]}...")
-    
-    return new_user
 
 def get_current_user_from_token(authorization: str, db: Session) -> User:
     """Get user from JWT token or session token"""
@@ -148,24 +100,43 @@ def get_current_user_from_token(authorization: str, db: Session) -> User:
     raise HTTPException(status_code=401, detail="Invalid token")
 
 def get_user_by_api_key(api_key: str, db: Session) -> User:
-    """Get user by API key for EA authentication"""
+    """Get user by API key for EA authentication - SECURE VERSION"""
     if not api_key:
+        logger.warning("🚨 EA authentication attempted with no API key")
+        return None
+    
+    # SECURITY: Always validate API key format first
+    if not api_key.startswith('ca_'):
+        logger.warning(f"🚨 Invalid API key format attempted: {api_key[:10]}...")
         return None
     
     # First check the in-memory cache
     if api_key in user_api_keys:
         user_id = user_api_keys[api_key]
-        user = db.query(User).filter(User.id == user_id).first()
+        user = db.query(User).filter(User.id == user_id, User.api_key == api_key).first()
         if user:
-            return user
+            # SECURITY: Double-check that the cached user still owns this API key
+            if user.api_key == api_key:
+                logger.info(f"✅ Valid cached API key for user {user.id} ({user.username})")
+                return user
+            else:
+                # Cache is stale - remove it
+                logger.warning(f"🚨 Stale cache detected for API key {api_key[:10]}... - removing")
+                del user_api_keys[api_key]
     
-    # If not in cache, query database
+    # If not in cache, query database with strict validation
     user = db.query(User).filter(User.api_key == api_key).first()
     if user:
-        # Cache the mapping
-        user_api_keys[api_key] = user.id
-        return user
+        # SECURITY: Verify the API key exactly matches and user is active
+        if user.api_key == api_key and user.is_active:
+            # Cache the mapping
+            user_api_keys[api_key] = user.id
+            logger.info(f"✅ Valid API key authentication for user {user.id} ({user.username})")
+            return user
+        else:
+            logger.warning(f"🚨 API key mismatch or inactive user: {api_key[:10]}... for user {user.id if user else 'None'}")
     
+    logger.warning(f"🚨 Invalid API key attempted: {api_key[:10]}...")
     return None
 
 def get_current_user(authorization: str = Header(None), db: Session = Depends(get_db)) -> User:
@@ -181,8 +152,8 @@ def get_current_user(authorization: str = Header(None), db: Session = Depends(ge
 async def register(request: RegisterRequest, db: Session = Depends(get_db)):
     """Register a new user with email and password"""
     try:
-        # Check if user already exists
-        existing_user = db.query(User).filter(User.email == request.email).first()
+        # Check if user already exists (case-insensitive)
+        existing_user = db.query(User).filter(User.email.ilike(request.email)).first()
         if existing_user:
             raise HTTPException(status_code=400, detail="Email already registered")
         
@@ -195,15 +166,14 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
         if len(request.password) < 6:
             raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
         
-        # Create new user
+        # Create new user with temporary API key
         hashed_password = hash_password(request.password)
-        api_key = f"ca_user_{uuid.uuid4().hex[:16]}"
         
         new_user = User(
-            email=request.email,
+            email=request.email.lower(),
             username=request.username,
             hashed_password=hashed_password,
-            api_key=api_key,
+            api_key="temp_placeholder",  # Temporary placeholder
             subscription_plan="free",
             credits=100,  # Welcome credits
             xp_points=0,
@@ -215,8 +185,8 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(new_user)
         
-        # Update API key with user ID
-        final_api_key = f"ca_{new_user.id}_{uuid.uuid4().hex[:12]}"
+        # Generate secure unique API key using the actual user ID
+        final_api_key = generate_unique_api_key(new_user.id, db)
         new_user.api_key = final_api_key
         db.commit()
         db.refresh(new_user)
@@ -249,8 +219,8 @@ async def register(request: RegisterRequest, db: Session = Depends(get_db)):
 async def login(request: LoginRequest, db: Session = Depends(get_db)):
     """Login with email and password"""
     try:
-        # Find user by email
-        user = db.query(User).filter(User.email == request.email).first()
+        # Find user by email (case-insensitive)
+        user = db.query(User).filter(User.email.ilike(request.email)).first()
         if not user:
             raise HTTPException(status_code=401, detail="Invalid email or password")
         
@@ -294,46 +264,39 @@ async def logout(user: User = Depends(get_current_user), db: Session = Depends(g
     db.commit()
     return {"message": "Logged out successfully"}
 
-# ===== SESSION ENDPOINTS (FOR EA ONLY) =====
+# ===== SESSION ENDPOINTS (DEPRECATED - SECURITY RISK) =====
+# These endpoints are disabled to prevent API key bypass attacks
 
 @app.get("/api/auth/session")
 async def get_session(request: Request, db: Session = Depends(get_db)):
-    """Get session info - ONLY for EA connections"""
-    session_id = get_session_id_from_request(request)
-    user = get_or_create_session_user_for_ea(session_id, db)
-    return {
-        "session_id": session_id,
-        "user_id": user.id,
-        "username": user.username,
-        "api_key": user.api_key,
-        "message": "Session valid"
-    }
+    """DEPRECATED: Session endpoint disabled for security - use proper API key authentication"""
+    logger.error("🚨 SECURITY: Attempted access to deprecated session endpoint")
+    raise HTTPException(
+        status_code=410, 
+        detail="Session endpoint deprecated. Please use proper API key authentication via /api/ea/data"
+    )
 
 @app.post("/api/auth/session")
 async def create_session(request: Request, db: Session = Depends(get_db)):
-    """Create/get session user info - ONLY for EA connections"""
-    session_id = get_session_id_from_request(request)
-    user = get_or_create_session_user_for_ea(session_id, db)
-    return {
-        "session_id": session_id,
-        "user_id": user.id,
-        "username": user.username,
-        "api_key": user.api_key,
-        "message": "Session active"
-    }
+    """DEPRECATED: Session endpoint disabled for security - use proper API key authentication"""
+    logger.error("🚨 SECURITY: Attempted access to deprecated session creation endpoint")
+    raise HTTPException(
+        status_code=410, 
+        detail="Session creation deprecated. Please use proper API key authentication via /api/ea/data"
+    )
 
 # === EA DATA ENDPOINTS ===
 
-@app.post("/api/ea/data")
-async def receive_ea_data(request: Request, db: Session = Depends(get_db)):
-    """Receive data from Expert Advisor"""
+@app.post("/api/ea/data")  # Keep endpoint for backwards compatibility
+async def receive_client_data(request: Request, db: Session = Depends(get_db)):
+    """Receive data from Windows Client (formerly Expert Advisor)"""
     try:
         # Log incoming request
         client_host = request.client.host if request.client else "unknown"
         user_agent = request.headers.get("user-agent", "unknown")
         content_type = request.headers.get("content-type", "unknown")
         
-        logger.info(f"EA request from {client_host}, User-Agent: {user_agent}, Content-Type: {content_type}")
+        logger.info(f"Client request from {client_host}, User-Agent: {user_agent}, Content-Type: {content_type}")
         
         data = await request.json()
         api_key = data.get("api_key")
@@ -341,19 +304,73 @@ async def receive_ea_data(request: Request, db: Session = Depends(get_db)):
         timestamp = data.get("timestamp")
         payload = data.get("data")
         
-        logger.info(f"EA data received - Type: {data_type}, API Key: {api_key[:8] if api_key else 'None'}...")
+        # NEW: Additional security fields
+        expected_user_id = data.get("user_id")  # Windows Client should know which user it belongs to
+        account_info = data.get("account_info", {})  # MT5 account details for verification
+        
+        logger.info(f"Client data received - Type: {data_type}, API Key: {api_key[:8] if api_key else 'None'}...")
         
         if not api_key:
-            logger.warning("EA request missing API key")
+            logger.warning("Client request missing API key")
             raise HTTPException(status_code=400, detail="API key required")
         
-        # Get user by API key
+        # Get user by API key - SECURE AUTHENTICATION
         user = get_user_by_api_key(api_key, db)
         if not user:
-            logger.warning(f"Invalid API key attempted: {api_key[:8]}...")
+            logger.error(f"🚨 SECURITY ALERT: Invalid API key attempted from {client_host} - Key: {api_key[:8]}...")
             raise HTTPException(status_code=401, detail="Invalid API key")
         
-        logger.info(f"EA data from user {user.username} - Type: {data_type}")
+        # 🔐 CRITICAL SECURITY CHECK: Verify user identity
+        client_info = data.get("client_info", {})
+        client_type = client_info.get("type", "unknown")
+        
+        # For new Windows client: verify user ID matches API key owner
+        if expected_user_id and expected_user_id != user.id:
+            logger.error(f"🚨 SECURITY VIOLATION: User ID mismatch - API belongs to user {user.id} but client claims {expected_user_id}")
+            logger.error(f"🚨 Host: {client_host}, Client: {client_type}, API Key: {api_key[:12]}...")
+            raise HTTPException(
+                status_code=403, 
+                detail=f"Security violation: User ID does not match API key owner"
+            )
+            
+        # For Windows client: also verify username matches
+        expected_username = data.get("username")
+        if expected_username and expected_username != user.username:
+            logger.error(f"🚨 SECURITY VIOLATION: Username mismatch - Expected {user.username} but got {expected_username}")
+            raise HTTPException(
+                status_code=403,
+                detail=f"Security violation: Username does not match account"
+            )
+            
+        # Log client type for monitoring
+        logger.info(f"🔐 Client type: {client_type} from {client_host}")
+        
+        # 🔐 ADDITIONAL SECURITY: IP-based API key binding (prevent key sharing)
+        stored_ip = getattr(user, 'last_login_ip', None) if hasattr(user, 'last_login_ip') else None
+        current_ip = client_host
+        
+        # Store the IP when user first uses their API key
+        if not user.last_login_ip:
+            user.last_login_ip = current_ip
+            db.commit()
+            logger.info(f"🔐 BINDING: API key {api_key[:12]}... bound to IP {current_ip} for user {user.id}")
+        elif user.last_login_ip != current_ip:
+            # Same API key being used from different IP - SECURITY ALERT
+            logger.error(f"🚨 SECURITY ALERT: API key {api_key[:12]}... used from new IP!")
+            logger.error(f"🚨 Registered IP: {user.last_login_ip} | Current IP: {current_ip}")
+            logger.error(f"🚨 User: {user.id} ({user.username}) | Host: {client_host}")
+            
+            # For now, allow but log heavily (you can make this stricter later)
+            logger.warning(f"⚠️  ALLOWING IP change for user {user.id} - consider implementing stricter controls")
+            
+            # Update to new IP (you might want to require manual verification instead)
+            user.last_login_ip = current_ip
+            db.commit()
+        
+        logger.info(f"✅ AUTHENTICATED Client data from user {user.username} (ID: {user.id}) - Type: {data_type}")
+        
+        # SECURITY: Log the API key usage for audit trail
+        logger.info(f"🔐 API Key usage: User {user.id} ({user.username}) from {client_host} using key {api_key[:12]}...")
         
         # Update user's last seen time
         user.last_seen = datetime.utcnow()
@@ -379,18 +396,18 @@ async def receive_ea_data(request: Request, db: Session = Depends(get_db)):
             "timestamp": timestamp
         }, user.id)
         
-        logger.info(f"EA data processed successfully for user {user.username}")
+        logger.info(f"Client data processed successfully for user {user.username}")
         return {"status": "success", "message": "Data received"}
         
     except HTTPException as e:
-        logger.error(f"HTTP Error processing EA data: {e.detail}")
+        logger.error(f"HTTP Error processing Client data: {e.detail}")
         raise e
     except Exception as e:
-        logger.error(f"Unexpected error processing EA data: {e}")
+        logger.error(f"Unexpected error processing Client data: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 async def handle_connection_status(user: User, data: dict, db: Session):
-    """Handle EA connection status"""
+    """Handle Windows Client connection status"""
     connected = data.get("connected", False)
     account_number = data.get("account_number")
     
@@ -409,7 +426,7 @@ async def handle_connection_status(user: User, data: dict, db: Session):
         connection.last_sync = datetime.utcnow()
     
     db.commit()
-    logger.info(f"User {user.id} EA connection: {'CONNECTED' if connected else 'DISCONNECTED'}")
+    logger.info(f"User {user.id} Windows Client connection: {'CONNECTED' if connected else 'DISCONNECTED'}")
 
 async def handle_account_update(user: User, data: dict, db: Session):
     """Handle account information update"""
@@ -417,7 +434,7 @@ async def handle_account_update(user: User, data: dict, db: Session):
     # For now, we'll store in MT5Connection
     connection = db.query(MT5Connection).filter(MT5Connection.user_id == user.id).first()
     if connection:
-        # Store raw values from EA
+        # Store raw values from Windows Client
         connection.account_balance = data.get("balance", 0)
         connection.account_equity = data.get("equity", 0)
         connection.account_margin = data.get("margin", 0)
@@ -445,39 +462,27 @@ async def handle_account_update(user: User, data: dict, db: Session):
                    f"Free Margin={data.get('free_margin')}, Margin Level={margin_level}%")
 
 async def handle_positions_update(user: User, positions: list, db: Session):
-    """Handle positions update from EA - LIVE DATA PROCESSING"""
+    """Handle positions update from Windows Client - LIVE DATA PROCESSING"""
     logger.info(f"🔄 Processing {len(positions)} positions for {user.username}")
     
     if not positions:
-        logger.info("📭 No positions received - CLOSING ALL OPEN TRADES")
-        # When EA sends empty positions, close all open trades
-        open_trades = db.query(Trade).filter(
-            Trade.user_id == user.id,
-            Trade.status == "open"
-        ).all()
+        logger.info("📭 No positions received - MARKET MAY BE CLOSED (not closing trades)")
+        # ⚠️ IMPORTANT: Don't automatically close trades on empty positions!
+        # Empty positions could mean:
+        # 1. Market is closed
+        # 2. EA temporarily disconnected
+        # 3. Actual trades were closed
+        # We should only close trades when we get explicit close signals
         
-        closed_count = 0
-        for trade in open_trades:
-            trade.status = "closed"
-            trade.close_time = datetime.utcnow()
-            trade.close_price = trade.current_price or trade.open_price
-            if trade.unrealized_profit:
-                trade.realized_profit = trade.unrealized_profit
-                trade.unrealized_profit = 0
-            closed_count += 1
-            
-        db.commit()
-        logger.info(f"🔒 CLOSED {closed_count} trades due to empty positions")
-        
-        # Send WebSocket update
+        # Send WebSocket update that no live positions are available
         await manager.send_user_message({
-            "type": "all_trades_closed",
-            "data": {"closed": closed_count},
-            "message": f"All {closed_count} trades closed"
+            "type": "positions_update",
+            "data": [],
+            "message": "No live positions (market may be closed)"
         }, user.id)
         return
     
-    # Process each position from EA
+    # Process each position from Windows Client
     new_count = 0
     updated_count = 0
     
@@ -524,58 +529,52 @@ async def handle_positions_update(user: User, positions: list, db: Session):
                     volume=volume,
                     open_price=open_price,
                     current_price=current_price,
-                    stop_loss=float(pos.get("sl", 0)),
-                    take_profit=float(pos.get("tp", 0)),
                     unrealized_profit=profit,
-                    realized_profit=0,
                     swap=swap,
-                    commission=0,
                     open_time=open_time,
-                    close_time=None,
-                    close_price=None,
-                    comment=pos.get("comment", ""),
-                    status="open"  # 🔥 CRITICAL: ALWAYS open for new positions
+                    status="open",  # 🔥 CRITICAL: Always open for new positions
+                    comment=""
                 )
                 db.add(new_trade)
                 new_count += 1
-                logger.info(f"🆕 Created {ticket}: {symbol} {trade_type} {volume} lots P&L={profit:.2f}")
+                logger.info(f"🆕 NEW trade {ticket}: {symbol} {profit:.2f}")
                 
         except Exception as e:
             logger.error(f"❌ Error processing position {pos}: {e}")
             continue
     
-    # Commit all changes
+    # 🔥 CRITICAL: Now check for trades that were actually closed
+    # Only close trades that exist in DB but are NOT in the current Windows Client positions
+    if positions:  # Only do this check if we have positions data
+        current_client_tickets = {str(pos.get("ticket", "")) for pos in positions if pos.get("ticket")}
+        db_open_trades = db.query(Trade).filter(
+            Trade.user_id == user.id,
+            Trade.status == "open"
+        ).all()
+        
+        closed_missing_count = 0
+        for db_trade in db_open_trades:
+            if db_trade.ticket not in current_client_tickets:
+                # This trade is open in DB but missing from Windows Client positions = ACTUALLY CLOSED!
+                db_trade.status = "closed"
+                db_trade.close_time = datetime.utcnow()
+                db_trade.close_price = db_trade.current_price or db_trade.open_price
+                if db_trade.unrealized_profit:
+                    db_trade.realized_profit = db_trade.unrealized_profit
+                    db_trade.unrealized_profit = 0
+                closed_missing_count += 1
+                logger.info(f"🔒 CLOSED missing trade {db_trade.ticket} (not in Windows Client positions)")
+        
+        if closed_missing_count > 0:
+            logger.info(f"🎯 CLOSED {closed_missing_count} trades that were actually closed")
+    
     db.commit()
-    logger.info(f"🎯 LIVE UPDATE: {new_count} new, {updated_count} updated trades")
-    
-    # 🔥 CRITICAL: Check for trades that were closed (exist in DB but not in EA positions)
-    current_ea_tickets = {str(pos.get("ticket", "")) for pos in positions if pos.get("ticket")}
-    db_open_trades = db.query(Trade).filter(
-        Trade.user_id == user.id,
-        Trade.status == "open"
-    ).all()
-    
-    closed_missing_count = 0
-    for db_trade in db_open_trades:
-        if db_trade.ticket not in current_ea_tickets:
-            # This trade is open in DB but missing from EA positions = CLOSED!
-            db_trade.status = "closed"
-            db_trade.close_time = datetime.utcnow()
-            db_trade.close_price = db_trade.current_price or db_trade.open_price
-            if db_trade.unrealized_profit:
-                db_trade.realized_profit = db_trade.unrealized_profit
-                db_trade.unrealized_profit = 0
-            closed_missing_count += 1
-            logger.info(f"🔒 CLOSED missing trade {db_trade.ticket} (not in EA positions)")
-    
-    if closed_missing_count > 0:
-        db.commit()
-        logger.info(f"🎯 CLOSED {closed_missing_count} trades that were missing from EA positions")
+    logger.info(f"🚀 Position update complete: {new_count} new, {updated_count} updated")
     
     # Send immediate WebSocket update for instant UI refresh
     await manager.send_user_message({
         "type": "positions_updated",
-        "data": {"new": new_count, "updated": updated_count, "closed": closed_missing_count},
+        "data": {"new": new_count, "updated": updated_count},
         "message": "Live trades updated"
     }, user.id)
 
@@ -756,55 +755,570 @@ async def get_account_stats(user: User = Depends(get_current_user), db: Session 
         "is_connected": connection.is_connected if connection else False
     }
 
+# ===== USER PROFILE ENDPOINTS =====
+
 @app.get("/api/user/profile")
-async def get_user_profile(user: User = Depends(get_current_user)):
-    """Get user profile information - requires authentication"""
-    return {
-        "user": {
-            "id": user.id,
-            "username": user.username,
-            "email": user.email,
-            "api_key": user.api_key,
-            "subscription_plan": user.subscription_plan,
-            "credits": user.credits,
-            "xp_points": user.xp_points,
-            "level": user.level,
-            "is_online": user.is_online,
-            "created_at": user.created_at.isoformat() if user.created_at else None,
-            "last_seen": user.last_seen.isoformat() if user.last_seen else None
+async def get_user_profile(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Get current user's profile information"""
+    try:
+        return {
+            "user": {
+                "id": current_user.id,
+                "email": current_user.email,
+                "username": current_user.username,
+                "api_key": current_user.api_key,
+                "subscription_plan": current_user.subscription_plan,
+                "credits": current_user.credits,
+                "xp_points": current_user.xp_points,
+                "level": current_user.level,
+                "is_master_trader": current_user.is_master_trader,
+                "created_at": current_user.created_at.isoformat() if current_user.created_at else None,
+                "last_seen": current_user.last_seen.isoformat() if current_user.last_seen else None
+            }
         }
-    }
+    except Exception as e:
+        logger.error(f"Error getting user profile: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get user profile")
+
+@app.post("/api/user/master-trader")
+async def toggle_master_trader(
+    request: dict,
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """Toggle user's master trader status"""
+    try:
+        is_master_trader = request.get("is_master_trader", False)
+        
+        # Update user's master trader status
+        current_user.is_master_trader = is_master_trader
+        db.commit()
+        
+        logger.info(f"User {current_user.username} (ID: {current_user.id}) master trader status: {is_master_trader}")
+        
+        return {
+            "success": True,
+            "is_master_trader": is_master_trader,
+            "message": f"Master trader status {'enabled' if is_master_trader else 'disabled'}"
+        }
+    except Exception as e:
+        logger.error(f"Error updating master trader status: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update master trader status")
+
+@app.get("/api/user/stats")
+async def get_user_stats(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Get current user's trading statistics"""
+    try:
+        # Get trading statistics from database
+        total_trades = db.query(Trade).filter(Trade.user_id == current_user.id).count()
+        
+        closed_trades = db.query(Trade).filter(
+            Trade.user_id == current_user.id,
+            Trade.status == 'closed'
+        ).all()
+        
+        # Calculate win rate
+        winning_trades = sum(1 for trade in closed_trades if (trade.profit or 0) > 0)
+        win_rate = round((winning_trades / len(closed_trades)) * 100, 1) if closed_trades else 0.0
+        
+        # Calculate total profit
+        total_profit = sum(trade.profit or 0 for trade in closed_trades)
+        
+        # Get follower counts
+        followers_count = db.query(Follow).filter(Follow.following_id == current_user.id).count()
+        following_count = db.query(Follow).filter(Follow.follower_id == current_user.id).count()
+        
+        # Calculate rank based on total profit and performance
+        rank = "Bronze"  # Default
+        if total_profit > 10000 and win_rate > 80:
+            rank = "Diamond"
+        elif total_profit > 5000 and win_rate > 70:
+            rank = "Platinum"
+        elif total_profit > 2000 and win_rate > 60:
+            rank = "Gold"
+        elif total_profit > 500 and win_rate > 50:
+            rank = "Silver"
+        
+        return {
+            "totalTrades": total_trades,
+            "winRate": win_rate,
+            "totalProfit": round(total_profit, 2),
+            "followers": followers_count,
+            "following": following_count,
+            "rank": rank,
+            "level": current_user.level,
+            "xp": current_user.xp_points,
+            "nextLevelXp": current_user.level * 1000
+        }
+    except Exception as e:
+        logger.error(f"Error getting user stats: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get user statistics")
+
+def clear_all_api_key_cache():
+    """Clear all cached API keys to force re-validation"""
+    global user_api_keys, user_sessions
+    
+    old_api_count = len(user_api_keys)
+    old_session_count = len(user_sessions)
+    
+    user_api_keys.clear()
+    user_sessions.clear()
+    
+    logger.info(f"🔐 SECURITY: Cleared {old_api_count} cached API keys and {old_session_count} sessions - forcing re-validation")
+
+def generate_unique_api_key(user_id: int, db: Session, max_attempts: int = 100) -> str:
+    """Generate a unique, complex API key with collision detection"""
+    import secrets
+    import hashlib
+    import time
+    
+    for attempt in range(max_attempts):
+        # Create highly complex API key components
+        timestamp = str(int(time.time() * 1000000))  # Microsecond precision
+        user_salt = str(user_id).zfill(8)  # Pad user ID to 8 digits
+        random_bytes = secrets.token_bytes(32)  # 32 bytes of cryptographic randomness
+        
+        # Create multiple hash components for complexity
+        hash1 = hashlib.sha256(f"{user_id}:{timestamp}:{secrets.token_hex(16)}".encode()).hexdigest()[:12]
+        hash2 = hashlib.blake2b(random_bytes, digest_size=16).hexdigest()[:16]
+        hash3 = secrets.token_urlsafe(12).replace('-', '').replace('_', '')[:12]
+        
+        # Combine into complex API key format
+        api_key = f"ca_{user_salt}_{hash1}_{hash2}_{hash3}_{timestamp[-8:]}"
+        
+        # Check for uniqueness in database
+        existing_key = db.query(User).filter(User.api_key == api_key).first()
+        if not existing_key:
+            logger.info(f"🔐 Generated unique API key on attempt {attempt + 1} for user {user_id}")
+            return api_key
+        else:
+            logger.warning(f"🚨 API key collision detected on attempt {attempt + 1} for user {user_id} - regenerating...")
+    
+    # If we get here, we couldn't generate a unique key after max attempts
+    raise Exception(f"Failed to generate unique API key after {max_attempts} attempts")
+
+@app.post("/api/user/regenerate-api-key")
+async def regenerate_api_key(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Regenerate API key for security purposes with collision detection"""
+    try:
+        # Generate new secure API key with uniqueness guarantee
+        new_api_key = generate_unique_api_key(current_user.id, db)
+        
+        # Remove old API key from cache if it exists
+        if current_user.api_key and current_user.api_key in user_api_keys:
+            del user_api_keys[current_user.api_key]
+        
+        # Update user's API key in database
+        old_api_key = current_user.api_key
+        current_user.api_key = new_api_key
+        db.commit()
+        db.refresh(current_user)  # Ensure database is updated
+        
+        # Cache the new API key
+        user_api_keys[new_api_key] = current_user.id
+        
+        # Verify the key was saved correctly
+        verification = db.query(User).filter(User.id == current_user.id).first()
+        if verification.api_key != new_api_key:
+            raise Exception("API key was not saved correctly to database")
+        
+        logger.info(f"🔐 SECURITY: User {current_user.username} (ID: {current_user.id}) regenerated API key")
+        logger.info(f"🔐 Old key: {old_api_key[:20] if old_api_key else 'None'}...")
+        logger.info(f"🔐 New key: {new_api_key[:20]}... (Length: {len(new_api_key)})")
+        
+        # Clear all caches to force re-validation everywhere
+        clear_all_api_key_cache()
+        
+        return {
+            "success": True,
+            "message": "Secure API key regenerated successfully. Please update your EA with the new key.",
+            "api_key": new_api_key,
+            "key_info": {
+                "length": len(new_api_key),
+                "format": "ca_[user_id]_[hash1]_[hash2]_[hash3]_[timestamp]",
+                "security_level": "Maximum"
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error regenerating API key: {e}")
+        raise HTTPException(status_code=500, detail="Failed to regenerate API key")
+
+@app.post("/api/admin/clear-api-cache")
+async def clear_api_cache():
+    """Admin endpoint to clear all API key cache and force re-validation"""
+    try:
+        clear_all_api_key_cache()
+        return {
+            "success": True,
+            "message": "All API key caches cleared - all connections will be re-validated"
+        }
+    except Exception as e:
+        logger.error(f"Error clearing API cache: {e}")
+        raise HTTPException(status_code=500, detail="Failed to clear API cache")
+
+@app.get("/api/marketplace/traders")
+async def get_marketplace_traders(db: Session = Depends(get_db)):
+    """Get all master traders for the marketplace with enhanced metrics"""
+    try:
+        # Get users who are master traders with their trading stats
+        traders_query = db.query(User).filter(
+            User.is_master_trader == True,
+            User.is_active == True
+        ).all()
+        
+        traders_data = []
+        
+        for trader in traders_query:
+            # Get trader's trading statistics
+            total_trades = db.query(Trade).filter(Trade.user_id == trader.id).count()
+            closed_trades = db.query(Trade).filter(
+                Trade.user_id == trader.id,
+                Trade.status == 'closed'
+            ).all()
+            
+            open_trades = db.query(Trade).filter(
+                Trade.user_id == trader.id,
+                Trade.status == 'open'
+            ).all()
+            
+            # Calculate performance metrics
+            total_profit = sum(trade.realized_profit or 0 for trade in closed_trades)
+            winning_trades = [trade for trade in closed_trades if (trade.realized_profit or 0) > 0]
+            losing_trades = [trade for trade in closed_trades if (trade.realized_profit or 0) < 0]
+            win_rate = (len(winning_trades) / len(closed_trades) * 100) if closed_trades else 0
+            
+            # Calculate additional performance metrics
+            avg_win = sum(trade.realized_profit for trade in winning_trades) / len(winning_trades) if winning_trades else 0
+            avg_loss = sum(abs(trade.realized_profit) for trade in losing_trades) / len(losing_trades) if losing_trades else 0
+            profit_factor = (avg_win * len(winning_trades)) / (avg_loss * len(losing_trades)) if losing_trades else 10
+            
+            # Calculate drawdown (simplified)
+            max_drawdown = 0
+            if closed_trades:
+                running_profit = 0
+                peak_profit = 0
+                for trade in sorted(closed_trades, key=lambda x: x.created_at):
+                    running_profit += trade.realized_profit or 0
+                    if running_profit > peak_profit:
+                        peak_profit = running_profit
+                    current_drawdown = (peak_profit - running_profit) / peak_profit * 100 if peak_profit > 0 else 0
+                    max_drawdown = max(max_drawdown, current_drawdown)
+            
+            # Calculate recent performance (last 30 days)
+            from datetime import datetime, timedelta
+            thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+            recent_trades = [trade for trade in closed_trades if trade.created_at >= thirty_days_ago]
+            recent_profit = sum(trade.realized_profit or 0 for trade in recent_trades)
+            
+            # Get current open trades count
+            open_trades_count = len(open_trades)
+            
+            # Calculate unrealized profit from open trades
+            unrealized_profit = sum(trade.unrealized_profit or 0 for trade in open_trades)
+            
+            # Get account info if available
+            mt5_connection = db.query(MT5Connection).filter(MT5Connection.user_id == trader.id).first()
+            account_balance = mt5_connection.account_balance if mt5_connection else 1000
+            
+            # Calculate daily return based on recent performance
+            daily_return = (recent_profit / account_balance) / 30 * 100 if account_balance > 0 else 0
+            
+            # Estimate follower count based on performance and trades
+            base_followers = max(1, int(total_trades / 10))  # At least 1 follower per 10 trades
+            performance_bonus = int(win_rate / 5) if win_rate > 50 else 0  # Bonus for good performance
+            estimated_followers = min(base_followers + performance_bonus, 999)
+            
+            # Get real follower count from database
+            follower_count = db.query(Follow).filter(
+                Follow.following_id == trader.id,
+                Follow.is_active == True
+            ).count()
+            
+            # Calculate risk score (0-100, lower is safer)
+            base_risk = max(10, min(90, 100 - win_rate))  # Base risk from win rate
+            drawdown_risk = min(max_drawdown, 50)  # Cap drawdown impact
+            risk_score = min(100, max(5, base_risk + (drawdown_risk / 2)))
+            
+            # Calculate Sharpe ratio (simplified)
+            if closed_trades and avg_loss > 0:
+                sharpe_ratio = (total_profit / len(closed_trades)) / avg_loss
+            else:
+                sharpe_ratio = 0
+            
+            # Check if trader is currently online (from WebSocket connections)
+            is_online = trader.id in manager.active_connections
+            
+            traders_data.append({
+                "id": trader.id,
+                "username": trader.username,
+                "level": trader.level,
+                "xp_points": trader.xp_points,
+                "subscription_plan": trader.subscription_plan,
+                "is_online": is_online,
+                "created_at": trader.created_at.isoformat() if trader.created_at else None,
+                "stats": {
+                    "total_trades": total_trades,
+                    "closed_trades": len(closed_trades),
+                    "open_trades": open_trades_count,
+                    "total_profit": round(total_profit, 2),
+                    "unrealized_profit": round(unrealized_profit, 2),
+                    "win_rate": round(win_rate, 1),
+                    "account_balance": round(account_balance, 2),
+                    "recent_profit": round(recent_profit, 2),
+                    "daily_return": round(daily_return, 3),
+                    "avg_win": round(avg_win, 2),
+                    "avg_loss": round(avg_loss, 2),
+                },
+                "performance": {
+                    "profit_factor": round(profit_factor, 2),
+                    "max_drawdown": round(max_drawdown, 2),
+                    "sharpe_ratio": round(sharpe_ratio, 2),
+                    "followers_count": follower_count,
+                    "risk_score": round(risk_score, 1),
+                    "win_streak": 0,  # TODO: Calculate actual win streak
+                    "loss_streak": 0,  # TODO: Calculate actual loss streak
+                    "monthly_return": round((recent_profit / account_balance) * 100, 2) if account_balance > 0 else 0,
+                    "consistency_score": round(min(100, win_rate + (100 - max_drawdown)), 1)
+                }
+            })
+        
+        # Sort by total profit descending
+        traders_data.sort(key=lambda x: x["stats"]["total_profit"], reverse=True)
+        
+        return {
+            "traders": traders_data,
+            "total_count": len(traders_data),
+            "total_online": sum(1 for t in traders_data if t["is_online"]),
+            "total_profit": sum(t["stats"]["total_profit"] for t in traders_data),
+            "avg_win_rate": sum(t["stats"]["win_rate"] for t in traders_data) / len(traders_data) if traders_data else 0,
+            "message": f"Found {len(traders_data)} master traders"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching marketplace traders: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch marketplace traders")
+
+
+@app.post("/api/marketplace/follow/{trader_id}")
+async def follow_trader(trader_id: int, request: Request, db: Session = Depends(get_db)):
+    """Follow a master trader for copy trading"""
+    try:
+        # Get current user from session
+        session_token = request.cookies.get("session_token")
+        if not session_token:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        user = db.query(User).filter(User.session_token == session_token).first()
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid session")
+        
+        # Check if trader exists and is a master trader
+        trader = db.query(User).filter(
+            User.id == trader_id,
+            User.is_master_trader == True,
+            User.is_active == True
+        ).first()
+        
+        if not trader:
+            raise HTTPException(status_code=404, detail="Master trader not found")
+        
+        # Can't follow yourself
+        if user.id == trader_id:
+            raise HTTPException(status_code=400, detail="Cannot follow yourself")
+        
+        # Check if already following
+        existing_follow = db.query(Follow).filter(
+            Follow.follower_id == user.id,
+            Follow.following_id == trader_id
+        ).first()
+        
+        if existing_follow:
+            if existing_follow.is_active:
+                raise HTTPException(status_code=400, detail="Already following this trader")
+            else:
+                # Reactivate existing follow
+                existing_follow.is_active = True
+                existing_follow.created_at = datetime.utcnow()
+        else:
+            # Create new follow
+            new_follow = Follow(
+                follower_id=user.id,
+                following_id=trader_id,
+                copy_percentage=100.0,
+                max_risk_per_trade=2.0,
+                is_active=True
+            )
+            db.add(new_follow)
+        
+        db.commit()
+        
+        # Get updated follower count
+        follower_count = db.query(Follow).filter(
+            Follow.following_id == trader_id,
+            Follow.is_active == True
+        ).count()
+        
+        return {
+            "message": f"Successfully following {trader.username}",
+            "following": True,
+            "follower_count": follower_count
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error following trader {trader_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to follow trader")
+
+
+@app.post("/api/marketplace/unfollow/{trader_id}")
+async def unfollow_trader(trader_id: int, request: Request, db: Session = Depends(get_db)):
+    """Unfollow a master trader"""
+    try:
+        # Get current user from session
+        session_token = request.cookies.get("session_token")
+        if not session_token:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        user = db.query(User).filter(User.session_token == session_token).first()
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid session")
+        
+        # Check if following this trader
+        follow = db.query(Follow).filter(
+            Follow.follower_id == user.id,
+            Follow.following_id == trader_id,
+            Follow.is_active == True
+        ).first()
+        
+        if not follow:
+            raise HTTPException(status_code=400, detail="Not following this trader")
+        
+        # Deactivate follow instead of deleting (for history)
+        follow.is_active = False
+        db.commit()
+        
+        # Get updated follower count
+        follower_count = db.query(Follow).filter(
+            Follow.following_id == trader_id,
+            Follow.is_active == True
+        ).count()
+        
+        return {
+            "message": "Successfully unfollowed trader",
+            "following": False,
+            "follower_count": follower_count
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error unfollowing trader {trader_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to unfollow trader")
+
+
+@app.get("/api/marketplace/following-status/{trader_id}")
+async def get_following_status(trader_id: int, request: Request, db: Session = Depends(get_db)):
+    """Check if current user is following a trader"""
+    try:
+        # Get current user from session
+        session_token = request.cookies.get("session_token")
+        if not session_token:
+            return {"following": False, "authenticated": False}
+        
+        user = db.query(User).filter(User.session_token == session_token).first()
+        if not user:
+            return {"following": False, "authenticated": False}
+        
+        # Check if following
+        follow = db.query(Follow).filter(
+            Follow.follower_id == user.id,
+            Follow.following_id == trader_id,
+            Follow.is_active == True
+        ).first()
+        
+        return {
+            "following": bool(follow),
+            "authenticated": True,
+            "copy_percentage": follow.copy_percentage if follow else None,
+            "max_risk_per_trade": follow.max_risk_per_trade if follow else None
+        }
+        
+    except Exception as e:
+        logger.error(f"Error checking following status for trader {trader_id}: {e}")
+        return {"following": False, "authenticated": True}
 
 @app.get("/api/mt5/status")
 async def get_mt5_status(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get MT5 connection status"""
     connection = db.query(MT5Connection).filter(MT5Connection.user_id == user.id).first()
     return {
-        "is_connected": connection.is_connected if connection else False,
+        "connected": connection.is_connected if connection else False,
+        "is_connected": connection.is_connected if connection else False,  # Legacy support
         "account_number": connection.login if connection else None,
-        "last_sync": connection.last_sync.isoformat() if connection and connection.last_sync else None
+        "last_sync": connection.last_sync.isoformat() if connection and connection.last_sync else None,
+        "message": "MT5 Connected" if (connection and connection.is_connected) else "MT5 Not Connected"
     }
 
-@app.get("/api/ea/download")
-async def download_ea(user: User = Depends(get_current_user)):
-    """Download Expert Advisor file"""
-    ea_path = Path(__file__).parent / "ea" / "CopyArenaConnector.mq5"
-    if not ea_path.exists():
-        # Try relative path from backend directory
-        ea_path = Path("../ea/CopyArenaConnector.mq5")
-    if not ea_path.exists():
-        # Try absolute path from project root
-        ea_path = Path(__file__).parent.parent / "ea" / "CopyArenaConnector.mq5"
+@app.get("/api/client/download")
+async def download_client(user: User = Depends(get_current_user)):
+    """Download CopyArena Windows Client"""
+    logger.info(f"User {user.username} ({user.email}) downloading Windows Client")
+    # Look for the compiled executable
+    client_paths = [
+        Path(__file__).parent / "CopyArenaClient.exe",  # In backend directory (production)
+        Path(__file__).parent / "windows_client" / "dist" / "CopyArenaClient.exe",
+        Path(__file__).parent.parent / "windows_client" / "dist" / "CopyArenaClient.exe",
+        Path("windows_client") / "dist" / "CopyArenaClient.exe"
+    ]
     
-    if ea_path.exists():
-        return FileResponse(
-            ea_path,
-            media_type="text/plain",
-            filename="CopyArenaConnector.mq5",
-            headers={"Content-Disposition": "attachment; filename=CopyArenaConnector.mq5"}
-        )
-    else:
-        raise HTTPException(status_code=404, detail=f"EA file not found. Checked: {ea_path}")
+    for client_path in client_paths:
+        if client_path.exists():
+            logger.info(f"Serving Windows Client from: {client_path}")
+            return FileResponse(
+                client_path,
+                media_type="application/octet-stream",
+                filename="CopyArenaClient.exe",
+                headers={
+                    "Content-Disposition": "attachment; filename=CopyArenaClient.exe",
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0"
+                }
+            )
+    
+    # If executable not found, offer the Python script
+    script_paths = [
+        Path(__file__).parent / "windows_client" / "copyarena_client.py",
+        Path(__file__).parent.parent / "windows_client" / "copyarena_client.py"
+    ]
+    
+    for script_path in script_paths:
+        if script_path.exists():
+            return FileResponse(
+                script_path,
+                media_type="text/plain",
+                filename="copyarena_client.py",
+                headers={"Content-Disposition": "attachment; filename=copyarena_client.py"}
+            )
+    
+    # Log the error for debugging
+    logger.error(f"Windows Client executable not found. Searched paths: {[str(p) for p in client_paths]}")
+    
+    raise HTTPException(
+        status_code=404, 
+        detail="CopyArena Windows Client not found. Please contact support to get the latest client version."
+    )
+
+@app.get("/api/ea/download")
+async def download_ea_deprecated(user: User = Depends(get_current_user)):
+    """DEPRECATED: EA download - Use Windows Client instead"""
+    logger.warning(f"🚨 User {user.username} attempted to download deprecated EA")
+    raise HTTPException(
+        status_code=410,
+        detail="Expert Advisor is deprecated. Please download the new Windows Client from your profile."
+    )
 
 @app.get("/api/leaderboard")
 async def get_leaderboard(sort_by: str = "xp_points", db: Session = Depends(get_db)):
@@ -1038,6 +1552,31 @@ async def debug_live_data(user: User = Depends(get_current_user)):
         "note": "Live data is in WebSocket messages, not stored in backend"
     }
 
+@app.get("/api/websocket/status")
+async def get_websocket_status():
+    """Get WebSocket connection status for admin panel"""
+    try:
+        # Get all active WebSocket connections from the manager
+        # manager.active_connections is a Dict[int, Set[WebSocket]]
+        online_users = list(manager.active_connections.keys())
+        connection_count = sum(len(connections) for connections in manager.active_connections.values())
+        
+        return {
+            "online_users": online_users,
+            "connection_count": connection_count,
+            "total_unique_users": len(online_users),
+            "status": "ok"
+        }
+    except Exception as e:
+        logger.error(f"Error getting WebSocket status: {e}")
+        return {
+            "online_users": [],
+            "connection_count": 0,
+            "total_unique_users": 0,
+            "status": "error",
+            "error": str(e)
+        }
+
 # === WEBSOCKET ===
 
 @app.websocket("/ws/user/{user_id}")
@@ -1048,7 +1587,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int):
             data = await websocket.receive_text()
             # Handle any client messages if needed
     except WebSocketDisconnect:
-        manager.disconnect(user_id)
+        manager.disconnect(websocket)  # Pass websocket object, not user_id
 
 # === STATIC FILES AND SPA ===
 

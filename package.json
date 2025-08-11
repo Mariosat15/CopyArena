@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "backend": "cd backend && python app.py",
-    "start": "concurrently \"npm run backend\" \"npm run dev\""
+    "admin": "cd admin_panel && python app.py",
+    "start": "concurrently \"npm run backend\" \"npm run admin\" \"npm run dev\" --names \"API,ADMIN,UI\" --prefix-colors \"blue,green,yellow\""
   },
   "dependencies": {
     "react": "^18.2.0",
