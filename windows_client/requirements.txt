@@ -6,8 +6,18 @@ urllib3>=1.26.0
 websocket-client>=1.7.0
 MetaTrader5>=5.0.45
 
-# GUI (tkinter is included with Python)
-# No additional GUI dependencies needed
+# Security & Storage
+cryptography>=41.0.0  # For secure credential storage
+keyring>=24.0.0       # System keyring integration
+
+# System Tray & Advanced GUI
+pystray>=0.19.4       # System tray functionality
+Pillow>=10.0.0        # Image handling for tray icons (also provides PIL)
+plyer>=2.1.0          # Cross-platform notifications
+
+# UI Theming & Professional Look
+tkinter-tooltip>=2.0.0  # Enhanced tooltips
+customtkinter>=5.2.0     # Modern tkinter widgets
 
 # Packaging (for creating executable)
 pyinstaller>=5.0

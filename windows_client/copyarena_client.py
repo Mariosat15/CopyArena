@@ -22,16 +22,167 @@ import MetaTrader5 as mt5
 from datetime import datetime
 import websocket
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import ttk, messagebox, scrolledtext, simpledialog
 import logging
 import hashlib
 from dataclasses import dataclass
 from typing import Optional, Dict, List
 
+# Enhanced imports for professional client
+import keyring
+from cryptography.fernet import Fernet
+import pystray
+from PIL import Image, ImageDraw, ImageFont
+from plyer import notification
+import base64
+import io
+
 def generate_copy_hash(master_name: str, master_ticket: str, open_time: str) -> str:
     """Generate unique hash for copy trade tracking"""
     hash_input = f"{master_name}_{master_ticket}_{open_time}"
     return hashlib.sha256(hash_input.encode()).hexdigest()
+
+class SecureCredentialManager:
+    """Secure credential storage using system keyring"""
+    
+    def __init__(self, app_name: str = "CopyArenaClient"):
+        self.app_name = app_name
+        self.encryption_key = self._get_or_create_encryption_key()
+        self.fernet = Fernet(self.encryption_key)
+    
+    def _get_or_create_encryption_key(self) -> bytes:
+        """Get or create encryption key from system keyring"""
+        try:
+            key_str = keyring.get_password(self.app_name, "encryption_key")
+            if key_str:
+                return key_str.encode()
+            else:
+                # Create new key
+                key = Fernet.generate_key()
+                keyring.set_password(self.app_name, "encryption_key", key.decode())
+                return key
+        except Exception:
+            # Fallback to file-based key (less secure but works)
+            key_file = "copyarena_client.key"
+            if os.path.exists(key_file):
+                with open(key_file, 'rb') as f:
+                    return f.read()
+            else:
+                key = Fernet.generate_key()
+                with open(key_file, 'wb') as f:
+                    f.write(key)
+                return key
+    
+    def save_credentials(self, username: str, password: str, mt5_login: str, mt5_password: str, mt5_server: str):
+        """Save credentials securely"""
+        try:
+            creds = {
+                'username': username,
+                'password': password,
+                'mt5_login': mt5_login,
+                'mt5_password': mt5_password,
+                'mt5_server': mt5_server
+            }
+            encrypted_data = self.fernet.encrypt(json.dumps(creds).encode())
+            keyring.set_password(self.app_name, "user_credentials", base64.b64encode(encrypted_data).decode())
+            return True
+        except Exception as e:
+            print(f"Failed to save credentials: {e}")
+            return False
+    
+    def load_credentials(self) -> Optional[Dict]:
+        """Load credentials securely"""
+        try:
+            encrypted_data_b64 = keyring.get_password(self.app_name, "user_credentials")
+            if encrypted_data_b64:
+                encrypted_data = base64.b64decode(encrypted_data_b64.encode())
+                decrypted_data = self.fernet.decrypt(encrypted_data)
+                return json.loads(decrypted_data.decode())
+            return None
+        except Exception as e:
+            print(f"Failed to load credentials: {e}")
+            return None
+    
+    def clear_credentials(self):
+        """Clear stored credentials"""
+        try:
+            keyring.delete_password(self.app_name, "user_credentials")
+            return True
+        except Exception:
+            return False
+
+class SystemTrayManager:
+    """System tray functionality"""
+    
+    def __init__(self, client_app):
+        self.client_app = client_app
+        self.tray_icon = None
+        self.icon_image = self._create_icon()
+    
+    def _create_icon(self):
+        """Create system tray icon"""
+        # Create a simple icon programmatically
+        size = (64, 64)
+        image = Image.new('RGBA', size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        
+        # Draw a simple circular icon with "CA" text
+        draw.ellipse([8, 8, 56, 56], fill=(34, 139, 34), outline=(0, 100, 0), width=2)
+        
+        try:
+            # Try to use a font
+            font = ImageFont.truetype("arial.ttf", 16)
+        except:
+            font = ImageFont.load_default()
+        
+        # Draw "CA" text
+        draw.text((22, 24), "CA", fill="white", font=font)
+        
+        return image
+    
+    def create_tray_menu(self):
+        """Create system tray menu"""
+        menu_items = [
+            pystray.MenuItem("Show", self.show_window, default=True),
+            pystray.MenuItem("Hide", self.hide_window),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Connect", self.client_app.connect_all, enabled=lambda item: not self.client_app.is_running),
+            pystray.MenuItem("Disconnect", self.client_app.disconnect_all, enabled=lambda item: self.client_app.is_running),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Exit", self.quit_application)
+        ]
+        return pystray.Menu(*menu_items)
+    
+    def show_window(self, icon=None, item=None):
+        """Show main window"""
+        self.client_app.root.deiconify()
+        self.client_app.root.lift()
+        self.client_app.root.focus_force()
+    
+    def hide_window(self, icon=None, item=None):
+        """Hide main window"""
+        self.client_app.root.withdraw()
+    
+    def quit_application(self, icon=None, item=None):
+        """Quit application completely"""
+        if self.tray_icon:
+            self.tray_icon.stop()
+        self.client_app.disconnect_all()
+        self.client_app.root.quit()
+    
+    def start_tray(self):
+        """Start system tray in background thread"""
+        self.tray_icon = pystray.Icon(
+            "CopyArena Client",
+            icon=self.icon_image,
+            menu=self.create_tray_menu()
+        )
+        
+        # Run in separate thread
+        tray_thread = threading.Thread(target=self.tray_icon.run, daemon=True)
+        tray_thread.start()
+        
+        return self.tray_icon
 
 # Configure logging
 logging.basicConfig(
@@ -47,7 +198,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ClientConfig:
     """Client configuration"""
-    server_url: str = "https://your-domain.com"  # Change to your production URL
+    server_url: str = "http://localhost:8002"  # Default to local development
     username: str = ""
     password: str = ""
     mt5_login: int = 0
@@ -55,6 +206,11 @@ class ClientConfig:
     mt5_server: str = ""
     update_interval: int = 1
     auto_connect: bool = False
+    auto_reconnect: bool = True
+    minimize_to_tray: bool = True
+    secure_storage: bool = True
+    notifications: bool = True
+    log_level: str = "INFO"
 
 class CopyArenaClient:
     """Main CopyArena Windows Client"""
@@ -68,10 +224,21 @@ class CopyArenaClient:
         self.is_running = False
         self.mt5_connected = False
         self.web_connected = False
+        self.manual_disconnect = False  # Track if user manually disconnected
+        
+        # Enhanced managers
+        self.credential_manager = SecureCredentialManager()
+        self.tray_manager = None  # Initialize after GUI setup
         
         # Threading
         self.update_thread = None
+        self.reconnect_thread = None
         self.stop_event = threading.Event()
+        
+        # Auto-reconnect settings
+        self.reconnect_attempts = 0
+        self.max_reconnect_attempts = 10
+        self.reconnect_delay = 5  # seconds
         
         # Data caches for change detection
         self.last_account_hash = ""
@@ -102,40 +269,132 @@ class CopyArenaClient:
         self.setup_gui()
         self.load_config()
         
+        # Initialize system tray
+        if self.config.minimize_to_tray:
+            self.tray_manager = SystemTrayManager(self)
+            self.tray_manager.start_tray()
+        
     def setup_gui(self):
-        """Setup the GUI interface"""
+        """Setup the enhanced GUI interface"""
         self.root = tk.Tk()
-        self.root.title("CopyArena Client v1.0")
-        self.root.geometry("800x700")
+        self.root.title("🔗 CopyArena Professional Client v2.0")
+        self.root.geometry("900x750")
         self.root.resizable(True, True)
         
-        # Configure styles
+        # Set window icon
+        self.root.iconbitmap(default=self._create_window_icon())
+        
+        # Configure professional styles
         style = ttk.Style()
         style.theme_use('clam')
         
-        # Main notebook for tabs
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill='both', expand=True, padx=10, pady=10)
+        # Custom colors matching web theme
+        style.configure('Title.TLabel', font=('Segoe UI', 12, 'bold'), foreground='#2c3e50')
+        style.configure('Success.TLabel', foreground='#27ae60')
+        style.configure('Error.TLabel', foreground='#e74c3c')
+        style.configure('Warning.TLabel', foreground='#f39c12')
+        style.configure('Info.TLabel', foreground='#3498db')
         
-        # Create tabs
+        # Handle window close event (minimize to tray instead of closing)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_window_close)
+        
+        # Handle minimize event
+        self.root.bind("<Unmap>", self._on_window_minimize)
+        
+        # Main frame with padding
+        main_frame = ttk.Frame(self.root)
+        main_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        # Header with logo and title
+        header_frame = ttk.Frame(main_frame)
+        header_frame.pack(fill='x', pady=(0, 10))
+        
+        title_label = ttk.Label(header_frame, text="🔗 CopyArena Professional Client", style='Title.TLabel')
+        title_label.pack(side='left')
+        
+        version_label = ttk.Label(header_frame, text="v2.0", foreground='#7f8c8d')
+        version_label.pack(side='right')
+        
+        # Main notebook for tabs
+        self.notebook = ttk.Notebook(main_frame)
+        self.notebook.pack(fill='both', expand=True)
+        
+        # Create enhanced tabs
         self.create_connection_tab()
         self.create_status_tab()
         self.create_logs_tab()
         self.create_settings_tab()
         
-        # Status bar
+        # Enhanced status bar with connection indicators
+        status_frame = ttk.Frame(self.root)
+        status_frame.pack(side='bottom', fill='x', padx=5, pady=2)
+        
         self.status_var = tk.StringVar()
-        self.status_var.set("Disconnected")
-        self.status_bar = ttk.Label(self.root, textvariable=self.status_var, relief='sunken')
-        self.status_bar.pack(side='bottom', fill='x')
+        self.status_var.set("🔴 Disconnected")
+        self.status_bar = ttk.Label(status_frame, textvariable=self.status_var, relief='sunken')
+        self.status_bar.pack(side='left', fill='x', expand=True)
+        
+        # Connection indicators
+        self.web_indicator = ttk.Label(status_frame, text="🌐 Web: ❌", style='Error.TLabel')
+        self.web_indicator.pack(side='right', padx=5)
+        
+        self.mt5_indicator = ttk.Label(status_frame, text="📊 MT5: ❌", style='Error.TLabel')
+        self.mt5_indicator.pack(side='right', padx=5)
+    
+    def _create_window_icon(self):
+        """Create window icon (returns None if creation fails)"""
+        try:
+            # This is a placeholder - in a real implementation you'd create an .ico file
+            return None
+        except:
+            return None
+    
+    def _on_window_close(self):
+        """Handle window close event"""
+        if self.config.minimize_to_tray and self.tray_manager:
+            self.root.withdraw()  # Hide window instead of closing
+            self._show_notification("CopyArena Client", "Application minimized to system tray")
+        else:
+            self.disconnect_all()
+            self.root.quit()
+    
+    def _on_window_minimize(self, event=None):
+        """Handle window minimize event"""
+        if self.config.minimize_to_tray and self.tray_manager and event.widget == self.root:
+            # Delay hiding to avoid conflicts
+            self.root.after(100, lambda: self.root.withdraw())
+    
+    def _show_notification(self, title: str, message: str):
+        """Show system notification"""
+        if self.config.notifications:
+            try:
+                notification.notify(
+                    title=title,
+                    message=message,
+                    app_name="CopyArena Client",
+                    timeout=3
+                )
+            except Exception:
+                pass  # Notifications not available on this system
         
     def create_connection_tab(self):
-        """Create connection/authentication tab"""
+        """Create enhanced connection/authentication tab"""
         conn_frame = ttk.Frame(self.notebook)
-        self.notebook.add(conn_frame, text="Connection")
+        self.notebook.add(conn_frame, text="🔗 Connection")
+        
+        # Credential management section
+        cred_mgmt_frame = ttk.LabelFrame(conn_frame, text="🔐 Credential Management", padding="10")
+        cred_mgmt_frame.pack(fill='x', padx=10, pady=5)
+        
+        cred_button_frame = ttk.Frame(cred_mgmt_frame)
+        cred_button_frame.pack(fill='x')
+        
+        ttk.Button(cred_button_frame, text="💾 Save Credentials Securely", command=self._save_credentials_secure).pack(side='left', padx=5)
+        ttk.Button(cred_button_frame, text="📂 Load Saved Credentials", command=self._load_credentials_secure).pack(side='left', padx=5)
+        ttk.Button(cred_button_frame, text="🗑️ Clear Saved Credentials", command=self._clear_credentials_secure).pack(side='left', padx=5)
         
         # Web credentials section
-        web_frame = ttk.LabelFrame(conn_frame, text="CopyArena Web Credentials", padding="10")
+        web_frame = ttk.LabelFrame(conn_frame, text="🌐 CopyArena Web Credentials", padding="10")
         web_frame.pack(fill='x', padx=10, pady=5)
         
         ttk.Label(web_frame, text="Server URL:").grid(row=0, column=0, sticky='w', pady=2)
@@ -143,7 +402,7 @@ class CopyArenaClient:
         self.server_entry.grid(row=0, column=1, sticky='ew', pady=2)
         self.server_entry.insert(0, self.config.server_url)
         
-        ttk.Label(web_frame, text="Username:").grid(row=1, column=0, sticky='w', pady=2)
+        ttk.Label(web_frame, text="Email/Username:").grid(row=1, column=0, sticky='w', pady=2)
         self.username_entry = ttk.Entry(web_frame, width=40)
         self.username_entry.grid(row=1, column=1, sticky='ew', pady=2)
         
@@ -154,7 +413,7 @@ class CopyArenaClient:
         web_frame.columnconfigure(1, weight=1)
         
         # MT5 credentials section
-        mt5_frame = ttk.LabelFrame(conn_frame, text="MetaTrader 5 Credentials", padding="10")
+        mt5_frame = ttk.LabelFrame(conn_frame, text="📊 MetaTrader 5 Credentials", padding="10")
         mt5_frame.pack(fill='x', padx=10, pady=5)
         
         ttk.Label(mt5_frame, text="Login:").grid(row=0, column=0, sticky='w', pady=2)
@@ -171,18 +430,98 @@ class CopyArenaClient:
         
         mt5_frame.columnconfigure(1, weight=1)
         
-        # Control buttons
+        # Control buttons with enhanced styling
         button_frame = ttk.Frame(conn_frame)
         button_frame.pack(fill='x', padx=10, pady=10)
         
-        self.connect_btn = ttk.Button(button_frame, text="Connect All", command=self.connect_all)
+        self.connect_btn = ttk.Button(button_frame, text="🚀 Connect All", command=self._connect_with_auto_reconnect)
         self.connect_btn.pack(side='left', padx=5)
         
-        self.disconnect_btn = ttk.Button(button_frame, text="Disconnect All", command=self.disconnect_all, state='disabled')
+        self.disconnect_btn = ttk.Button(button_frame, text="🔌 Disconnect All", command=self._manual_disconnect, state='disabled')
         self.disconnect_btn.pack(side='left', padx=5)
         
-        self.save_config_btn = ttk.Button(button_frame, text="Save Config", command=self.save_config)
+        self.save_config_btn = ttk.Button(button_frame, text="💾 Save Config", command=self.save_config)
         self.save_config_btn.pack(side='right', padx=5)
+        
+        # Connection status indicator
+        self.connection_status = ttk.Label(button_frame, text="🔴 Disconnected", style='Error.TLabel')
+        self.connection_status.pack(side='right', padx=10)
+    
+    def _save_credentials_secure(self):
+        """Save credentials using secure storage"""
+        try:
+            success = self.credential_manager.save_credentials(
+                username=self.username_entry.get(),
+                password=self.password_entry.get(),
+                mt5_login=self.mt5_login_entry.get(),
+                mt5_password=self.mt5_password_entry.get(),
+                mt5_server=self.mt5_server_entry.get()
+            )
+            if success:
+                self.log_message("✅ Credentials saved securely!", "INFO")
+                self._show_notification("Security", "Credentials saved securely")
+                messagebox.showinfo("Success", "Credentials saved securely to system keyring!")
+            else:
+                self.log_message("❌ Failed to save credentials securely", "ERROR")
+                messagebox.showerror("Error", "Failed to save credentials securely")
+        except Exception as e:
+            self.log_message(f"❌ Error saving credentials: {e}", "ERROR")
+            messagebox.showerror("Error", f"Error saving credentials: {e}")
+    
+    def _load_credentials_secure(self):
+        """Load credentials from secure storage"""
+        try:
+            creds = self.credential_manager.load_credentials()
+            if creds:
+                self.username_entry.delete(0, tk.END)
+                self.username_entry.insert(0, creds.get('username', ''))
+                
+                self.password_entry.delete(0, tk.END)
+                self.password_entry.insert(0, creds.get('password', ''))
+                
+                self.mt5_login_entry.delete(0, tk.END)
+                self.mt5_login_entry.insert(0, creds.get('mt5_login', ''))
+                
+                self.mt5_password_entry.delete(0, tk.END)
+                self.mt5_password_entry.insert(0, creds.get('mt5_password', ''))
+                
+                self.mt5_server_entry.delete(0, tk.END)
+                self.mt5_server_entry.insert(0, creds.get('mt5_server', ''))
+                
+                self.log_message("✅ Credentials loaded securely!", "INFO")
+                self._show_notification("Security", "Credentials loaded from secure storage")
+                messagebox.showinfo("Success", "Credentials loaded from secure storage!")
+            else:
+                self.log_message("⚠️ No saved credentials found", "WARNING")
+                messagebox.showwarning("No Credentials", "No saved credentials found")
+        except Exception as e:
+            self.log_message(f"❌ Error loading credentials: {e}", "ERROR")
+            messagebox.showerror("Error", f"Error loading credentials: {e}")
+    
+    def _clear_credentials_secure(self):
+        """Clear saved credentials"""
+        try:
+            if messagebox.askyesno("Confirm", "Are you sure you want to clear saved credentials?"):
+                success = self.credential_manager.clear_credentials()
+                if success:
+                    self.log_message("✅ Credentials cleared securely!", "INFO")
+                    self._show_notification("Security", "Saved credentials cleared")
+                    messagebox.showinfo("Success", "Saved credentials cleared!")
+                else:
+                    messagebox.showwarning("Warning", "No credentials were found to clear")
+        except Exception as e:
+            self.log_message(f"❌ Error clearing credentials: {e}", "ERROR")
+            messagebox.showerror("Error", f"Error clearing credentials: {e}")
+    
+    def _connect_with_auto_reconnect(self):
+        """Connect with auto-reconnect enabled"""
+        self.manual_disconnect = False
+        self.connect_all()
+    
+    def _manual_disconnect(self):
+        """Manual disconnect - disables auto-reconnect"""
+        self.manual_disconnect = True
+        self.disconnect_all()
         
     def create_status_tab(self):
         """Create status monitoring tab"""
@@ -224,20 +563,82 @@ class CopyArenaClient:
         account_scroll.pack(side='right', fill='y')
         
     def create_logs_tab(self):
-        """Create logs tab"""
+        """Create enhanced logs tab"""
         logs_frame = ttk.Frame(self.notebook)
-        self.notebook.add(logs_frame, text="Logs")
+        self.notebook.add(logs_frame, text="📄 Logs")
         
-        # Log display
-        self.log_text = scrolledtext.ScrolledText(logs_frame, height=30, width=100)
+        # Log level filter
+        filter_frame = ttk.Frame(logs_frame)
+        filter_frame.pack(fill='x', padx=10, pady=5)
+        
+        ttk.Label(filter_frame, text="🔍 Filter Level:").pack(side='left', padx=5)
+        
+        self.log_level_var = tk.StringVar(value="ALL")
+        log_level_combo = ttk.Combobox(filter_frame, textvariable=self.log_level_var, 
+                                     values=["ALL", "ERROR", "WARNING", "INFO"], width=10, state='readonly')
+        log_level_combo.pack(side='left', padx=5)
+        log_level_combo.bind('<<ComboboxSelected>>', self._filter_logs)
+        
+        # Auto-scroll toggle
+        self.auto_scroll_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(filter_frame, text="📜 Auto-scroll", variable=self.auto_scroll_var).pack(side='left', padx=10)
+        
+        # Log display with enhanced styling
+        self.log_text = scrolledtext.ScrolledText(logs_frame, height=30, width=100, font=('Consolas', 9))
         self.log_text.pack(fill='both', expand=True, padx=10, pady=10)
         
-        # Log controls
+        # Configure text tags for colored logging
+        self.log_text.tag_config('ERROR', foreground='#e74c3c', font=('Consolas', 9, 'bold'))
+        self.log_text.tag_config('WARNING', foreground='#f39c12', font=('Consolas', 9, 'bold'))
+        self.log_text.tag_config('INFO', foreground='#2c3e50', font=('Consolas', 9))
+        self.log_text.tag_config('SUCCESS', foreground='#27ae60', font=('Consolas', 9, 'bold'))
+        self.log_text.tag_config('DEBUG', foreground='#7f8c8d', font=('Consolas', 8))
+        
+        # Log controls with enhanced buttons
         log_controls = ttk.Frame(logs_frame)
         log_controls.pack(fill='x', padx=10, pady=5)
         
-        ttk.Button(log_controls, text="Clear Logs", command=self.clear_logs).pack(side='left')
-        ttk.Button(log_controls, text="Save Logs", command=self.save_logs).pack(side='left', padx=5)
+        ttk.Button(log_controls, text="🗑️ Clear Logs", command=self.clear_logs).pack(side='left', padx=2)
+        ttk.Button(log_controls, text="💾 Save Logs", command=self.save_logs).pack(side='left', padx=2)
+        ttk.Button(log_controls, text="📋 Copy Selected", command=self._copy_selected_logs).pack(side='left', padx=2)
+        ttk.Button(log_controls, text="🔍 Find", command=self._find_in_logs).pack(side='left', padx=2)
+        
+        # Log statistics
+        self.log_stats = ttk.Label(log_controls, text="📊 Logs: 0 | Errors: 0 | Warnings: 0")
+        self.log_stats.pack(side='right', padx=5)
+        
+        # Initialize log counters
+        self.log_counts = {'ERROR': 0, 'WARNING': 0, 'INFO': 0, 'SUCCESS': 0, 'DEBUG': 0}
+    
+    def _filter_logs(self, event=None):
+        """Filter logs by level"""
+        # This is a placeholder - in a full implementation you'd filter the displayed logs
+        pass
+    
+    def _copy_selected_logs(self):
+        """Copy selected log text to clipboard"""
+        try:
+            selected_text = self.log_text.get(tk.SEL_FIRST, tk.SEL_LAST)
+            self.root.clipboard_clear()
+            self.root.clipboard_append(selected_text)
+            self._show_notification("Logs", "Selected logs copied to clipboard")
+        except tk.TclError:
+            messagebox.showwarning("No Selection", "Please select some log text to copy")
+    
+    def _find_in_logs(self):
+        """Find text in logs"""
+        search_text = tk.simpledialog.askstring("Find", "Enter text to search:")
+        if search_text:
+            # Simple search implementation
+            start = self.log_text.search(search_text, '1.0', tk.END)
+            if start:
+                end = f"{start}+{len(search_text)}c"
+                self.log_text.see(start)
+                self.log_text.tag_remove('SEARCH', '1.0', tk.END)
+                self.log_text.tag_add('SEARCH', start, end)
+                self.log_text.tag_config('SEARCH', background='yellow')
+            else:
+                messagebox.showinfo("Not Found", f"Text '{search_text}' not found in logs")
         
     def create_settings_tab(self):
         """Create settings tab"""
@@ -258,18 +659,45 @@ class CopyArenaClient:
         ttk.Checkbutton(interval_frame, text="Auto-connect on startup", variable=self.auto_connect_var).grid(row=1, column=0, columnspan=2, sticky='w', pady=5)
         
     def log_message(self, message: str, level: str = "INFO"):
-        """Add message to log display"""
+        """Add enhanced message to log display with icons and colors"""
         timestamp = datetime.now().strftime("%H:%M:%S")
-        log_entry = f"[{timestamp}] {level}: {message}\n"
         
-        self.log_text.insert(tk.END, log_entry)
-        self.log_text.see(tk.END)
+        # Map level to icons
+        level_icons = {
+            "ERROR": "❌",
+            "WARNING": "⚠️", 
+            "INFO": "ℹ️",
+            "SUCCESS": "✅",
+            "DEBUG": "🔍"
+        }
+        
+        icon = level_icons.get(level, "📝")
+        log_entry = f"[{timestamp}] {icon} {level}: {message}\n"
+        
+        # Insert with color formatting
+        self.log_text.insert(tk.END, log_entry, level)
+        
+        # Auto-scroll if enabled
+        if self.auto_scroll_var.get():
+            self.log_text.see(tk.END)
+        
+        # Update log counters
+        if hasattr(self, 'log_counts'):
+            self.log_counts[level] = self.log_counts.get(level, 0) + 1
+            total_logs = sum(self.log_counts.values())
+            
+            # Update statistics display
+            if hasattr(self, 'log_stats'):
+                stats_text = f"📊 Logs: {total_logs} | Errors: {self.log_counts.get('ERROR', 0)} | Warnings: {self.log_counts.get('WARNING', 0)}"
+                self.log_stats.config(text=stats_text)
         
         # Also log to file
         if level == "ERROR":
             logger.error(message)
         elif level == "WARNING":
             logger.warning(message)
+        elif level == "DEBUG":
+            logger.debug(message)
         else:
             logger.info(message)
             
@@ -438,50 +866,140 @@ class CopyArenaClient:
             self.account_tree.insert('', 'end', text='Margin Level', values=(f"{account_info.margin_level:.2f}%" if account_info.margin_level else "N/A",))
             
     def connect_all(self):
-        """Connect to both web platform and MT5"""
-        self.log_message("Starting connection process...")
+        """Connect to both web platform and MT5 with enhanced error handling"""
+        self.log_message("🚀 Starting connection process...", "INFO")
         
-        # Authenticate with web platform
-        if not self.authenticate_web():
-            messagebox.showerror("Error", "Failed to authenticate with CopyArena web platform")
-            return
-            
-        # Connect to MT5
-        if not self.connect_mt5():
-            messagebox.showerror("Error", "Failed to connect to MetaTrader 5")
-            return
-            
-        # Start data sync
-        self.start_data_sync()
+        # Reset reconnect attempts on successful manual connection
+        if not self.manual_disconnect:
+            self.reconnect_attempts = 0
         
-        # Update UI
-        self.connect_btn.config(state='disabled')
-        self.disconnect_btn.config(state='normal')
-        self.status_var.set("Connected - Syncing Data")
+        try:
+            # Authenticate with web platform
+            if not self.authenticate_web():
+                self.log_message("❌ Failed to authenticate with web platform", "ERROR")
+                if not self.manual_disconnect:
+                    self._schedule_reconnect("Web authentication failed")
+                return False
+                
+            # Connect to MT5
+            if not self.connect_mt5():
+                self.log_message("❌ Failed to connect to MetaTrader 5", "ERROR")
+                if not self.manual_disconnect:
+                    self._schedule_reconnect("MT5 connection failed")
+                return False
+                
+            # Start data sync
+            self.start_data_sync()
+            
+            # Update UI
+            self.connect_btn.config(state='disabled')
+            self.disconnect_btn.config(state='normal')
+            self.status_var.set("🟢 Connected - Syncing Data")
+            self.connection_status.config(text="🟢 Connected", style='Success.TLabel')
+            
+            # Update connection indicators
+            self.web_indicator.config(text="🌐 Web: ✅", style='Success.TLabel')
+            self.mt5_indicator.config(text="📊 MT5: ✅", style='Success.TLabel')
+            
+            self.log_message("✅ All connections established successfully!", "SUCCESS")
+            self._show_notification("CopyArena Client", "Successfully connected to all services")
+            
+            # Reset reconnect attempts on successful connection
+            self.reconnect_attempts = 0
+            return True
+            
+        except Exception as e:
+            self.log_message(f"❌ Connection error: {e}", "ERROR")
+            if not self.manual_disconnect:
+                self._schedule_reconnect(f"Connection error: {e}")
+            return False
         
     def disconnect_all(self):
-        """Disconnect from all services"""
+        """Disconnect from all services with enhanced handling"""
+        self.log_message("🔌 Disconnecting from all services...", "INFO")
+        
+        # Stop auto-reconnect if it's running
+        self.stop_event.set()
+        
+        # Stop data sync
         self.stop_data_sync()
         
+        # Disconnect MT5
         if self.mt5_connected:
             mt5.shutdown()
             self.mt5_connected = False
             self.mt5_status_var.set("❌ Disconnected")
+            self.log_message("📊 MT5 disconnected", "INFO")
             
+        # Disconnect web
         self.web_connected = False
         self.web_status_var.set("❌ Disconnected")
         self.sync_status_var.set("⏸️ Stopped")
         
+        # Update UI
         self.connect_btn.config(state='normal')
         self.disconnect_btn.config(state='disabled')
-        self.status_var.set("Disconnected")
+        self.status_var.set("🔴 Disconnected")
+        self.connection_status.config(text="🔴 Disconnected", style='Error.TLabel')
         
-        self.log_message("All connections closed")
+        # Update connection indicators
+        self.web_indicator.config(text="🌐 Web: ❌", style='Error.TLabel')
+        self.mt5_indicator.config(text="📊 MT5: ❌", style='Error.TLabel')
+        
+        self.log_message("✅ All connections closed", "INFO")
         
         # Close HTTP session
         if hasattr(self, 'session'):
             self.session.close()
-            self.log_message("HTTP session closed")
+            self.log_message("🌐 HTTP session closed", "INFO")
+        
+        # Show notification if not manual disconnect
+        if not self.manual_disconnect:
+            self._show_notification("CopyArena Client", "Connection lost - attempting to reconnect...")
+    
+    def _schedule_reconnect(self, reason: str):
+        """Schedule automatic reconnection"""
+        if self.manual_disconnect or not self.config.auto_reconnect:
+            return
+            
+        if self.reconnect_attempts >= self.max_reconnect_attempts:
+            self.log_message(f"❌ Max reconnect attempts ({self.max_reconnect_attempts}) reached. Auto-reconnect disabled.", "ERROR")
+            self._show_notification("CopyArena Client", "Auto-reconnect failed - manual intervention required")
+            return
+        
+        self.reconnect_attempts += 1
+        delay = min(self.reconnect_delay * self.reconnect_attempts, 60)  # Max 60 seconds delay
+        
+        self.log_message(f"⏱️ Scheduling reconnect attempt {self.reconnect_attempts}/{self.max_reconnect_attempts} in {delay} seconds. Reason: {reason}", "WARNING")
+        
+        # Cancel any existing reconnect thread
+        if self.reconnect_thread and self.reconnect_thread.is_alive():
+            return
+        
+        # Start new reconnect thread
+        self.reconnect_thread = threading.Thread(target=self._auto_reconnect_worker, args=(delay,), daemon=True)
+        self.reconnect_thread.start()
+    
+    def _auto_reconnect_worker(self, delay: int):
+        """Worker thread for auto-reconnection"""
+        try:
+            # Wait for delay period
+            for i in range(delay):
+                if self.stop_event.is_set() or self.manual_disconnect:
+                    return
+                time.sleep(1)
+                
+                # Update status during countdown
+                remaining = delay - i
+                self.root.after(0, lambda r=remaining: self.status_var.set(f"🔄 Reconnecting in {r}s..."))
+            
+            # Attempt reconnection
+            if not self.stop_event.is_set() and not self.manual_disconnect:
+                self.log_message(f"🔄 Auto-reconnect attempt {self.reconnect_attempts}/{self.max_reconnect_attempts}", "INFO")
+                self.root.after(0, self.connect_all)
+                
+        except Exception as e:
+            self.log_message(f"❌ Auto-reconnect error: {e}", "ERROR")
         
     def start_data_sync(self):
         """Start the data synchronization thread"""

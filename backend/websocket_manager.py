@@ -36,6 +36,9 @@ class ConnectionManager:
         """Connect a Windows Client WebSocket for trade commands"""
         await websocket.accept()
         
+        # Check if this is a new connection (not a reconnection)
+        was_offline = user_id not in self.client_connections
+        
         # Store client connection (only one per user)
         if user_id in self.client_connections:
             # Disconnect existing client connection
@@ -52,16 +55,109 @@ class ConnectionManager:
         }
         
         logger.info(f"Windows Client for user {user_id} connected and ready for trade commands")
+        
+        # Check if this is a master trader coming online
+        if was_offline:
+            await self._notify_master_online_if_needed(user_id)
+    
+    async def _notify_master_online_if_needed(self, user_id: int):
+        """Check if user is a master and notify followers if they came online"""
+        try:
+            # We need to import here to avoid circular imports
+            from sqlalchemy.orm import sessionmaker
+            from .database import engine
+            from .models import User, Follow
+            
+            Session = sessionmaker(bind=engine)
+            db = Session()
+            
+            try:
+                user = db.query(User).filter(User.id == user_id).first()
+                if user and user.is_master_trader:
+                    # Master came online - notify all followers
+                    followers = db.query(Follow).filter(
+                        Follow.following_id == user.id,
+                        Follow.is_active == True
+                    ).all()
+                    
+                    # Send online notification to all connected followers
+                    online_message = {
+                        "type": "master_status_change",
+                        "data": {
+                            "master_id": user.id,
+                            "master_username": user.username,
+                            "status": "online",
+                            "timestamp": datetime.utcnow().isoformat(),
+                            "message": f"Master trader {user.username} is now online"
+                        }
+                    }
+                    
+                    for follow in followers:
+                        await self.send_user_message(online_message, follow.follower_id)
+                    
+                    logger.info(f"🟢 Master {user.username} online notification sent to {len(followers)} followers")
+                    
+            finally:
+                db.close()
+                
+        except Exception as e:
+            logger.error(f"Error notifying master online: {e}")
     
     def disconnect_client(self, websocket: WebSocket, user_id: int):
-        """Disconnect a Windows Client WebSocket"""
+        """Disconnect a Windows Client WebSocket and notify followers if master goes offline"""
         if user_id in self.client_connections and self.client_connections[user_id] == websocket:
             del self.client_connections[user_id]
+            
+            # Check if this was a master trader going offline
+            asyncio.create_task(self._notify_master_offline_if_needed(user_id))
         
         if websocket in self.connection_metadata:
             del self.connection_metadata[websocket]
         
         logger.info(f"Windows Client for user {user_id} disconnected")
+    
+    async def _notify_master_offline_if_needed(self, user_id: int):
+        """Check if user is a master and notify followers if they went offline"""
+        try:
+            # We need to import here to avoid circular imports
+            from sqlalchemy.orm import sessionmaker
+            from .database import engine
+            from .models import User, Follow
+            
+            Session = sessionmaker(bind=engine)
+            db = Session()
+            
+            try:
+                user = db.query(User).filter(User.id == user_id).first()
+                if user and user.is_master_trader:
+                    # Master went offline - notify all followers
+                    followers = db.query(Follow).filter(
+                        Follow.following_id == user.id,
+                        Follow.is_active == True
+                    ).all()
+                    
+                    # Send offline notification to all connected followers
+                    offline_message = {
+                        "type": "master_status_change",
+                        "data": {
+                            "master_id": user.id,
+                            "master_username": user.username,
+                            "status": "offline",
+                            "timestamp": datetime.utcnow().isoformat(),
+                            "message": f"Master trader {user.username} went offline"
+                        }
+                    }
+                    
+                    for follow in followers:
+                        await self.send_user_message(offline_message, follow.follower_id)
+                    
+                    logger.info(f"📴 Master {user.username} offline notification sent to {len(followers)} followers")
+                    
+            finally:
+                db.close()
+                
+        except Exception as e:
+            logger.error(f"Error notifying master offline: {e}")
     
     def disconnect(self, websocket: WebSocket):
         """Disconnect a WebSocket"""
