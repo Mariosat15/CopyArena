@@ -20,12 +20,18 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import MetaTrader5 as mt5
 from datetime import datetime
+import websocket
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 import logging
+import hashlib
 from dataclasses import dataclass
 from typing import Optional, Dict, List
-import hashlib
+
+def generate_copy_hash(master_name: str, master_ticket: str, open_time: str) -> str:
+    """Generate unique hash for copy trade tracking"""
+    hash_input = f"{master_name}_{master_ticket}_{open_time}"
+    return hashlib.sha256(hash_input.encode()).hexdigest()
 
 # Configure logging
 logging.basicConfig(
@@ -87,6 +93,10 @@ class CopyArenaClient:
         )
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
+        
+        # WebSocket for receiving trade commands
+        self.ws_thread = None
+        self.websocket = None
         
         # Initialize GUI
         self.setup_gui()
@@ -355,6 +365,9 @@ class CopyArenaClient:
                 self.web_status_var.set("✅ Connected")
                 self.log_message(f"Web authentication successful for user: {self.username}")
                 self.log_message(f"API Key retrieved: {self.api_key[:20]}... (Length: {len(self.api_key)})")
+                
+                # Start WebSocket for receiving trade commands
+                self.start_websocket_connection()
                 return True
             elif response.status_code == 401:
                 self.log_message("Authentication failed: Invalid email or password", "ERROR")
@@ -543,9 +556,40 @@ class CopyArenaClient:
         except Exception as e:
             self.log_message(f"Account sync error: {e}", "ERROR")
             
-    def sync_positions_data(self):
-        """Sync open positions"""
+    def get_market_status(self):
+        """Check if the market is open for major symbols"""
         try:
+            if not self.mt5_connected:
+                return False
+                
+            # Check multiple major symbols to determine market status
+            test_symbols = ["EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD"]
+            
+            for symbol in test_symbols:
+                symbol_info = mt5.symbol_info(symbol)
+                if symbol_info is not None:
+                    # Check if symbol is tradeable (market is open)
+                    if symbol_info.trade_mode == mt5.SYMBOL_TRADE_MODE_FULL:
+                        # Double-check with tick data - ensure it's recent (within last hour)
+                        tick = mt5.symbol_info_tick(symbol)
+                        if tick is not None and tick.time > 0:
+                            current_time = time.time()
+                            # If tick is recent (within last hour), market is likely open
+                            if (current_time - tick.time) < 3600:
+                                return True
+                            
+            return False
+            
+        except Exception as e:
+            self.log_message(f"Failed to check market status: {e}", "ERROR")
+            return False
+    
+    def sync_positions_data(self):
+        """Sync open positions with market status"""
+        try:
+            # Get market status first
+            market_open = self.get_market_status()
+            
             positions = mt5.positions_get()
             if positions is None:
                 positions = []
@@ -571,11 +615,23 @@ class CopyArenaClient:
                     "time_update": int(pos.time_update) if pos.time_update else None
                 }
                 positions_data.append(position_data)
-                
+            
+            # Create payload with market status and metadata
+            payload = {
+                "positions": positions_data,
+                "market_open": market_open,
+                "total_positions": len(positions_data),
+                "timestamp": time.time()
+            }
+            
+            # Log market status for debugging
+            market_status = "🟢 OPEN" if market_open else "🔴 CLOSED"
+            self.log_message(f"📊 Market: {market_status} | Positions: {len(positions_data)}")
+            
             # Check if data changed
             data_hash = hashlib.md5(str(sorted(positions_data, key=lambda x: x['ticket'])).encode()).hexdigest()
             if data_hash != self.last_positions_hash:
-                self.send_data_to_server("positions_update", positions_data)
+                self.send_data_to_server("positions_update", payload)
                 self.last_positions_hash = data_hash
                 
         except Exception as e:
@@ -614,6 +670,408 @@ class CopyArenaClient:
                 
         except Exception as e:
             self.log_message(f"Orders sync error: {e}", "ERROR")
+    
+    # === TRADE EXECUTION FUNCTIONS ===
+    
+    def ensure_symbol_ready(self, symbol: str) -> bool:
+        try:
+            info = mt5.symbol_info(symbol)
+            if info is None:
+                self.log_message(f"❌ Unknown symbol: {symbol}", "ERROR")
+                return False
+            if not info.visible:
+                if not mt5.symbol_select(symbol, True):
+                    self.log_message(f"❌ Failed to select symbol: {symbol}", "ERROR")
+                    return False
+            tick = mt5.symbol_info_tick(symbol)
+            if tick is None:
+                self.log_message(f"❌ No tick data for symbol: {symbol}", "ERROR")
+                return False
+            return True
+        except Exception as e:
+            self.log_message(f"❌ ensure_symbol_ready error: {e}", "ERROR")
+            return False
+
+    def execute_buy_order(self, symbol: str, volume: float, price: float = None, sl: float = None, tp: float = None, comment: str = "CopyTrade"):
+        """Execute a BUY order on MT5"""
+        try:
+            if not self.mt5_connected:
+                self.log_message("❌ Cannot execute buy order: MT5 not connected", "ERROR")
+                return False
+            if not self.ensure_symbol_ready(symbol):
+                return False
+                
+            # Prepare order request
+            tick = mt5.symbol_info_tick(symbol)
+            exec_price = tick.ask if price is None and tick else price
+            if exec_price is None:
+                self.log_message(f"❌ No exec price for BUY {symbol}", "ERROR")
+                return False
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": symbol,
+                "volume": volume,
+                "type": mt5.ORDER_TYPE_BUY,
+                "price": exec_price,
+                "sl": sl,
+                "tp": tp,
+                "comment": comment,
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": mt5.ORDER_FILLING_IOC,
+            }
+            
+            # Send the order
+            result = mt5.order_send(request)
+            
+            if result is None:
+                self.log_message(f"❌ Buy order failed: {mt5.last_error()}", "ERROR")
+                return False
+            if getattr(result, 'retcode', None) != mt5.TRADE_RETCODE_DONE:
+                self.log_message(f"❌ Buy order failed: {result.comment} (Code: {result.retcode})", "ERROR")
+                return False
+            
+            self.log_message(f"✅ BUY order executed: {symbol} {volume} lots, Ticket: {result.order}")
+            return result.order
+            
+        except Exception as e:
+            self.log_message(f"❌ Buy order error: {e}", "ERROR")
+            return False
+    
+    def execute_sell_order(self, symbol: str, volume: float, price: float = None, sl: float = None, tp: float = None, comment: str = "CopyTrade"):
+        """Execute a SELL order on MT5"""
+        try:
+            if not self.mt5_connected:
+                self.log_message("❌ Cannot execute sell order: MT5 not connected", "ERROR")
+                return False
+            if not self.ensure_symbol_ready(symbol):
+                return False
+                
+            # Prepare order request
+            tick = mt5.symbol_info_tick(symbol)
+            exec_price = tick.bid if price is None and tick else price
+            if exec_price is None:
+                self.log_message(f"❌ No exec price for SELL {symbol}", "ERROR")
+                return False
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": symbol,
+                "volume": volume,
+                "type": mt5.ORDER_TYPE_SELL,
+                "price": exec_price,
+                "sl": sl,
+                "tp": tp,
+                "comment": comment,
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": mt5.ORDER_FILLING_IOC,
+            }
+            
+            # Send the order
+            result = mt5.order_send(request)
+            
+            if result is None:
+                self.log_message(f"❌ Sell order failed: {mt5.last_error()}", "ERROR")
+                return False
+            if getattr(result, 'retcode', None) != mt5.TRADE_RETCODE_DONE:
+                self.log_message(f"❌ Sell order failed: {result.comment} (Code: {result.retcode})", "ERROR")
+                return False
+            
+            self.log_message(f"✅ SELL order executed: {symbol} {volume} lots, Ticket: {result.order}")
+            return result.order
+            
+        except Exception as e:
+            self.log_message(f"❌ Sell order error: {e}", "ERROR")
+            return False
+    
+    def close_position(self, ticket: int, volume: float = None):
+        """Close a position by ticket"""
+        try:
+            if not self.mt5_connected:
+                self.log_message("❌ Cannot close position: MT5 not connected", "ERROR")
+                return False
+            
+            self.log_message(f"🔍 DEBUG: Looking for position with ticket: {ticket}")
+            
+            # Get position info
+            position = mt5.positions_get(ticket=ticket)
+            if not position:
+                self.log_message(f"❌ Position {ticket} not found", "ERROR")
+                
+                # 🔍 DEBUG: Show all current positions to help debug
+                all_positions = mt5.positions_get()
+                if all_positions:
+                    self.log_message(f"🔍 DEBUG: Current positions: {[p.ticket for p in all_positions]}")
+                else:
+                    self.log_message(f"🔍 DEBUG: No positions currently open")
+                return False
+                
+            position = position[0]
+            close_volume = volume if volume else position.volume
+            
+            self.log_message(f"🔍 DEBUG: Found position - Symbol: {position.symbol}, Volume: {position.volume}, Type: {position.type}")
+            
+            # Determine close order type (opposite of position type)
+            close_type = mt5.ORDER_TYPE_SELL if position.type == 0 else mt5.ORDER_TYPE_BUY
+            close_price = mt5.symbol_info_tick(position.symbol).bid if position.type == 0 else mt5.symbol_info_tick(position.symbol).ask
+            
+            # Prepare close request
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": position.symbol,
+                "volume": close_volume,
+                "type": close_type,
+                "position": ticket,
+                "price": close_price,
+                "comment": "CopyTrade Close",
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": mt5.ORDER_FILLING_IOC,
+            }
+            
+            # Send close order
+            result = mt5.order_send(request)
+            
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                self.log_message(f"❌ Close position failed: {result.comment} (Code: {result.retcode})", "ERROR")
+                return False
+            
+            self.log_message(f"✅ Position CLOSED: {ticket} ({close_volume} lots)")
+            return True
+            
+        except Exception as e:
+            self.log_message(f"❌ Close position error: {e}", "ERROR")
+            return False
+    
+    # === WEBSOCKET COMMAND HANDLING ===
+    
+    def start_websocket_connection(self):
+        """Start WebSocket connection for receiving trade commands"""
+        if not self.user_id or not self.api_token:
+            self.log_message("❌ Cannot start WebSocket: Missing authentication", "ERROR")
+            return
+            
+        try:
+            server_url = self.server_entry.get().replace("http://", "").replace("https://", "")
+            ws_url = f"ws://{server_url}/ws/client/{self.user_id}"
+            
+            self.log_message(f"🔌 Connecting to WebSocket: {ws_url}")
+            
+            # Create WebSocket connection
+            self.websocket = websocket.WebSocketApp(
+                ws_url,
+                header={"Authorization": f"Bearer {self.api_token}"},
+                on_message=self.on_websocket_message,
+                on_error=self.on_websocket_error,
+                on_close=self.on_websocket_close,
+                on_open=self.on_websocket_open
+            )
+            
+            # Start WebSocket in separate thread
+            self.ws_thread = threading.Thread(target=self.websocket.run_forever, daemon=True)
+            self.ws_thread.start()
+            
+        except Exception as e:
+            self.log_message(f"❌ WebSocket connection error: {e}", "ERROR")
+    
+    def on_websocket_open(self, ws):
+        """WebSocket connection opened"""
+        self.log_message("✅ WebSocket connected - Ready to receive trade commands")
+    
+    def on_websocket_message(self, ws, message):
+        """Handle incoming WebSocket messages (trade commands)"""
+        try:
+            data = json.loads(message)
+            command_type = data.get("type")
+            payload = data.get("data", {})
+            
+            self.log_message(f"📨 Received command: {command_type}")
+            
+            if command_type == "execute_trade":
+                self.handle_trade_command(payload)
+            elif command_type == "close_trade":
+                self.handle_close_command(payload)
+            elif command_type == "modify_trade":
+                self.handle_modify_command(payload)
+            else:
+                self.log_message(f"❓ Unknown command type: {command_type}", "WARNING")
+                
+        except json.JSONDecodeError:
+            self.log_message(f"❌ Invalid WebSocket message format: {message}", "ERROR")
+        except Exception as e:
+            self.log_message(f"❌ WebSocket message error: {e}", "ERROR")
+    
+    def handle_trade_command(self, payload):
+        """Execute a trade order from copy trading"""
+        try:
+            symbol = payload.get("symbol")
+            trade_type = payload.get("type")  # "buy" or "sell"
+            volume = payload.get("volume")
+            sl = payload.get("sl")
+            tp = payload.get("tp")
+            master_trader = payload.get("master_trader", "Unknown")
+            
+            # 🔍 DEBUG: Log the exact trade type received
+            self.log_message(f"🔍 DEBUG: Raw trade_type received: '{trade_type}' (type: {type(trade_type)})")
+            self.log_message(f"🔍 DEBUG: Full payload: {payload}")
+            
+            self.log_message(f"🎯 Executing copy trade: {trade_type.upper()} {symbol} {volume} lots (from {master_trader})")
+            
+            # Use provided copy_hash for robust cloning/identification via MT5 comment
+            copy_hash = payload.get("copy_hash")
+            short_hash = copy_hash[:16] if copy_hash else None  # MT5 comment length limit
+            comment = f"CA:{short_hash}" if short_hash else f"Copy:{master_trader}"
+
+            if trade_type.lower() == "buy":
+                self.log_message(f"✅ Executing BUY order for {symbol}")
+                result = self.execute_buy_order(symbol, volume, sl=sl, tp=tp, comment=comment)
+            elif trade_type.lower() == "sell":
+                self.log_message(f"✅ Executing SELL order for {symbol}")
+                result = self.execute_sell_order(symbol, volume, sl=sl, tp=tp, comment=comment)
+            else:
+                self.log_message(f"❌ Invalid trade type: '{trade_type}' (should be 'buy' or 'sell')", "ERROR")
+                return
+            
+            # Send execution result back to server
+            self.send_execution_result("trade_executed", {
+                "success": bool(result),
+                "ticket": result if result else None,
+                "copy_hash": copy_hash,
+                "master_trader": master_trader,
+                "master_ticket": payload.get("master_ticket", ""),
+                "open_time": datetime.now().isoformat(),
+                "original_command": payload
+            })
+            
+        except Exception as e:
+            self.log_message(f"❌ Trade command execution error: {e}", "ERROR")
+    
+    def handle_close_command(self, payload):
+        """Close a position from copy trading"""
+        try:
+            ticket = payload.get("ticket")
+            volume = payload.get("volume")
+            master_trader = payload.get("master_trader", "Unknown")
+            reason = payload.get("reason", "master_closed")
+            
+            # 🔍 DEBUG: Log the close command details
+            self.log_message(f"🔍 DEBUG: Close command received - Ticket: {ticket} (type: {type(ticket)})")
+            self.log_message(f"🔍 DEBUG: Full close payload: {payload}")
+            
+            self.log_message(f"🔒 Closing copy trade: Ticket {ticket} (from {master_trader}, reason: {reason})")
+            
+            result = False
+            actual_ticket_closed = None
+            
+            # Try closing by ticket if provided and valid
+            if ticket is not None:
+                # Convert ticket to int if it's a string
+                if isinstance(ticket, str):
+                    try:
+                        ticket = int(ticket)
+                        self.log_message(f"🔍 DEBUG: Converted ticket to int: {ticket}")
+                    except ValueError:
+                        self.log_message(f"❌ Invalid ticket format: {ticket}", "ERROR")
+                        ticket = None
+                
+                if ticket is not None:
+                    result = self.close_position(ticket, volume)
+                    if result:
+                        actual_ticket_closed = ticket
+            
+            # If ticket is None or closing by ticket failed, try fallback by copy_hash in comment
+            if not result:
+                copy_hash = payload.get("copy_hash")
+                if copy_hash:
+                    short_hash = copy_hash[:16]
+                    self.log_message(f"🔍 Fallback: searching for position with hash '{short_hash}' in comment...")
+                    try:
+                        all_positions = mt5.positions_get()
+                        if all_positions:
+                            self.log_message(f"🔍 DEBUG: Found {len(all_positions)} open positions")
+                            for p in all_positions:
+                                position_comment = str(p.comment) if p.comment else ""
+                                self.log_message(f"🔍 DEBUG: Position {p.ticket} - Symbol: {p.symbol}, Comment: '{position_comment}'")
+                                # Check both CA:hash format and just the hash
+                                if position_comment and (short_hash in position_comment or f"CA:{short_hash}" in position_comment):
+                                    self.log_message(f"🔍 Fallback: found matching position ticket {p.ticket} with comment '{position_comment}'")
+                                    result = self.close_position(p.ticket, volume)
+                                    if result:
+                                        actual_ticket_closed = p.ticket
+                                    break
+                            if not result:
+                                self.log_message(f"🔍 Fallback: no position found with hash '{short_hash}' in comment")
+                                # Additional debug: show what hashes we're looking for vs what we have
+                                self.log_message(f"🔍 DEBUG: Looking for hash '{short_hash}' or 'CA:{short_hash}' in comments")
+                        else:
+                            self.log_message(f"🔍 Fallback: no positions currently open")
+                    except Exception as e:
+                        self.log_message(f"Fallback close by hash error: {e}", "ERROR")
+                else:
+                    self.log_message(f"❌ No copy_hash provided for fallback close", "ERROR")
+            
+            if result:
+                self.log_message(f"✅ Copy trade closed successfully: Ticket {actual_ticket_closed}")
+            else:
+                self.log_message(f"❌ Failed to close copy trade: No matching position found", "ERROR")
+            
+            # Send close result back to server with copy hash
+            copy_hash = payload.get("copy_hash", "")
+            self.send_execution_result("trade_closed", {
+                "success": result,
+                "ticket": actual_ticket_closed,
+                "copy_hash": copy_hash,
+                "master_trader": master_trader,
+                "original_command": payload
+            })
+            
+        except Exception as e:
+            self.log_message(f"❌ Close command execution error: {e}", "ERROR")
+    
+    def handle_modify_command(self, payload):
+        """Modify a position (SL/TP) from copy trading"""
+        try:
+            # Implementation for modifying positions
+            ticket = payload.get("ticket")
+            new_sl = payload.get("sl")
+            new_tp = payload.get("tp")
+            
+            self.log_message(f"🔧 Modifying trade: Ticket {ticket}")
+            
+            # TODO: Implement MT5 position modification
+            # This would use mt5.order_send with TRADE_ACTION_SLTP
+            
+        except Exception as e:
+            self.log_message(f"❌ Modify command execution error: {e}", "ERROR")
+    
+    def send_execution_result(self, result_type: str, data: dict):
+        """Send trade execution results back to server via WebSocket"""
+        try:
+            if self.websocket and hasattr(self.websocket, 'sock') and self.websocket.sock:
+                # Send via WebSocket for copy trading processing
+                message = {
+                    "type": result_type,
+                    "data": data  # Wrap data in "data" field as backend expects
+                }
+                self.websocket.send(json.dumps(message))
+                self.log_message(f"✅ {result_type} sent via WebSocket successfully")
+            else:
+                # Fallback to HTTP if WebSocket not available
+                self.send_data_to_server(result_type, data)
+                self.log_message(f"✅ {result_type} sent via HTTP fallback")
+        except Exception as e:
+            self.log_message(f"❌ Failed to send execution result: {e}", "ERROR")
+            # Try HTTP fallback
+            try:
+                self.send_data_to_server(result_type, data)
+                self.log_message(f"✅ {result_type} sent via HTTP fallback after WebSocket error")
+            except Exception as e2:
+                self.log_message(f"❌ Both WebSocket and HTTP failed: {e2}", "ERROR")
+    
+    def on_websocket_error(self, ws, error):
+        """WebSocket error handler"""
+        self.log_message(f"❌ WebSocket error: {error}", "ERROR")
+    
+    def on_websocket_close(self, ws, close_status_code, close_msg):
+        """WebSocket connection closed"""
+        self.log_message(f"🔌 WebSocket disconnected: {close_msg}", "WARNING")
             
     def send_data_to_server(self, data_type: str, data: any):
         """Send data to CopyArena server with proper authentication"""

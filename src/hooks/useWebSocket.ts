@@ -148,7 +148,22 @@ export const useWebSocket = (userId?: number) => {
             })
             
             // Add latency metadata to the positions data
-            const positionsWithLatency = data.data.map((pos: any) => ({
+            // Handle multiple payload shapes:
+            // - { type, data: Position[] }
+            // - { type, data: { positions: Position[] } }
+            // - { type, positions: Position[] }
+            let positionsArray: any[] = []
+            if (Array.isArray(data?.data)) {
+              positionsArray = data.data
+            } else if (Array.isArray(data?.data?.positions)) {
+              positionsArray = data.data.positions
+            } else if (Array.isArray((data as any)?.positions)) {
+              positionsArray = (data as any).positions
+            } else {
+              positionsArray = []
+            }
+            
+            const positionsWithLatency = positionsArray.map((pos: any) => ({
               ...pos,
               ws_receive_time: wsReceiveTime,
               ws_latency: instantLatency,

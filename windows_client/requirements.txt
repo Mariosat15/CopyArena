@@ -3,6 +3,7 @@
 # Core dependencies
 requests>=2.28.0
 urllib3>=1.26.0
+websocket-client>=1.7.0
 MetaTrader5>=5.0.45
 
 # GUI (tkinter is included with Python)

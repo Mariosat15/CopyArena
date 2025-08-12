@@ -25,10 +25,10 @@ backend_dir = os.path.join(os.path.dirname(__file__), '..', 'backend')
 db_path = os.path.join(backend_dir, 'copyarena.db')
 os.environ['DATABASE_URL'] = f'sqlite:///{db_path}'
 
-from models import SessionLocal, User, Trade, MT5Connection, engine
+sys.path.append(backend_dir)
+from models import SessionLocal, User, Trade, MT5Connection, engine, Follow
 from database_security import DatabaseSecurity
 from sqlalchemy import func
-from models import Follow
 
 app = Flask(__name__)
 app.secret_key = 'admin_panel_secret_key_change_in_production'

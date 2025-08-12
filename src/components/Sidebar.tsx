@@ -3,15 +3,16 @@ import React from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useAuthStore } from '../stores/authStore'
 import { cn } from '../lib/utils'
-import { 
-  LayoutDashboard, 
-  Users, 
-  Trophy, 
-  User, 
-  FileText, 
+import {
+  LayoutDashboard,
+  Users,
+  Trophy,
+  User,
+  FileText,
   LogOut,
   Zap,
-  Cable
+  Cable,
+  Copy
 } from 'lucide-react'
 import { Button } from './ui/button'
 import { Badge } from './ui/badge'
@@ -19,6 +20,7 @@ import { Badge } from './ui/badge'
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   { name: 'Marketplace', href: '/marketplace', icon: Users },
+  { name: 'Copy Trading', href: '/copy-trading', icon: Copy },
   { name: 'Leaderboard', href: '/leaderboard', icon: Trophy },
   { name: 'MT5 Connection', href: '/mt5', icon: Cable },
   { name: 'Profile', href: '/profile', icon: User },

@@ -2,7 +2,8 @@
 """Check trade statuses in database"""
 
 import sys
-sys.path.append('../backend')
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), 'backend'))
 
 from models import SessionLocal, Trade
 

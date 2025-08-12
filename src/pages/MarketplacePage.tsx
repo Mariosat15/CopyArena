@@ -7,7 +7,7 @@ import { Button } from '../components/ui/button'
 import { Badge } from '../components/ui/badge'
 import { Input } from '../components/ui/input'
 import { Progress } from '../components/ui/progress'
-import { Search, Users, Star, TrendingUp, Activity, Shield, Wifi, WifiOff, Eye, Award, BarChart3, TrendingDown, Heart, Copy, UserCheck, UserPlus } from 'lucide-react'
+import { Search, Users, Star, TrendingUp, Activity, Shield, Wifi, WifiOff, Eye, Award, BarChart3, TrendingDown, Heart, Copy, UserCheck, UserPlus, Settings } from 'lucide-react'
 import { formatCurrency } from '../lib/utils'
 import { toast } from '../hooks/use-toast'
 import { api } from '../lib/api'
@@ -124,23 +124,38 @@ export function MarketplacePage() {
     if (!user) return
     
     try {
+      // Fetch all following relationships at once
+      const response = await api.get('/api/copy-trading/following')
+      const followingList = response.data.following || []
+      
+      // Create a lookup map for following status
       const statuses: {[key: number]: FollowingStatus} = {}
       
-      // Fetch following status for each trader
-      await Promise.all(
-        traders.map(async (trader) => {
-          try {
-            const response = await api.get(`/api/marketplace/following-status/${trader.id}`)
-            statuses[trader.id] = response.data
-          } catch (error) {
-            statuses[trader.id] = { following: false, authenticated: true }
-          }
-        })
-      )
+      // Initialize all traders as not following
+      traders.forEach(trader => {
+        statuses[trader.id] = { following: false, authenticated: true }
+      })
+      
+      // Update status for traders being followed
+      followingList.forEach((follow: any) => {
+        const traderId = follow.master_trader.id
+        statuses[traderId] = {
+          following: true,
+          authenticated: true,
+          copy_percentage: follow.follow_settings.copy_percentage,
+          max_risk_per_trade: follow.follow_settings.max_risk_per_trade
+        }
+      })
       
       setFollowingStatus(statuses)
     } catch (error) {
       console.error('Error fetching following statuses:', error)
+      // Initialize all as not following on error
+      const statuses: {[key: number]: FollowingStatus} = {}
+      traders.forEach(trader => {
+        statuses[trader.id] = { following: false, authenticated: true }
+      })
+      setFollowingStatus(statuses)
     }
   }
 
@@ -154,15 +169,6 @@ export function MarketplacePage() {
       return
     }
 
-    if (user.subscription_plan === 'free') {
-      toast({
-        title: "Upgrade Required",
-        description: "Copy trading requires a Pro or Elite subscription.",
-        variant: "destructive"
-      })
-      return
-    }
-
     setFollowingLoading(prev => ({ ...prev, [traderId]: true }))
     
     try {
@@ -170,7 +176,7 @@ export function MarketplacePage() {
       
       if (isCurrentlyFollowing) {
         // Unfollow
-        const response = await api.post(`/api/marketplace/unfollow/${traderId}`)
+        const response = await api.delete(`/api/unfollow/${traderId}`)
         setFollowingStatus(prev => ({
           ...prev,
           [traderId]: { ...prev[traderId], following: false }
@@ -183,20 +189,20 @@ export function MarketplacePage() {
                 ...trader, 
                 performance: { 
                   ...trader.performance, 
-                  followers_count: response.data.follower_count 
+                  followers_count: Math.max(0, trader.performance.followers_count - 1)
                 } 
               }
             : trader
         ))
         
         toast({
-          title: "Success",
+          title: "Unfollowed",
           description: response.data.message,
           variant: "default"
         })
       } else {
         // Follow
-        const response = await api.post(`/api/marketplace/follow/${traderId}`)
+        const response = await api.post(`/api/follow/${traderId}`)
         setFollowingStatus(prev => ({
           ...prev,
           [traderId]: { ...prev[traderId], following: true }
@@ -209,15 +215,15 @@ export function MarketplacePage() {
                 ...trader, 
                 performance: { 
                   ...trader.performance, 
-                  followers_count: response.data.follower_count 
+                  followers_count: trader.performance.followers_count + 1
                 } 
               }
             : trader
         ))
         
         toast({
-          title: "Success",
-          description: response.data.message,
+          title: "Now Following",
+          description: `${response.data.message} - Copy trading enabled!`,
           variant: "default"
         })
       }
@@ -655,8 +661,9 @@ export function MarketplacePage() {
                     </div>
                   </div>
 
-                  {/* Enhanced Action Button */}
-                  <div className="pt-4 border-t border-border/50">
+                  {/* Enhanced Copy Trading Action Section */}
+                  <div className="pt-4 border-t border-border/50 space-y-3">
+                    {/* Main Action Button */}
                     <Button 
                       onClick={() => handleFollow(trader.id)}
                       disabled={isFollowLoading || trader.id === user?.id}
@@ -682,16 +689,63 @@ export function MarketplacePage() {
                         </>
                       ) : isFollowing ? (
                         <>
-                          <UserCheck className="w-5 h-5 mr-2" />
-                          Following • {trader.performance.followers_count} Investors
+                          <Copy className="w-5 h-5 mr-2" />
+                          Copy Trading Active
                         </>
                       ) : (
                         <>
                           <UserPlus className="w-5 h-5 mr-2" />
-                          {user?.subscription_plan === 'free' ? 'Upgrade to Copy Trade' : `Copy Trade • ${trader.performance.followers_count} Investors`}
+                          Start Copy Trading
                         </>
                       )}
                     </Button>
+
+                    {/* Copy Trading Status & Settings */}
+                    {isFollowing && trader.id !== user?.id && (
+                      <div className="bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-lg p-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                            <span className="text-sm font-semibold text-green-700 dark:text-green-300">
+                              Copy Trading Enabled
+                            </span>
+                          </div>
+                          <Badge variant="outline" className="bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 border-green-300 dark:border-green-700">
+                            {trader.performance.followers_count} Investors
+                          </Badge>
+                        </div>
+                        
+                        {/* Copy Settings Preview */}
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground">Copy %:</span>
+                            <span className="font-semibold">{followingStatus[trader.id]?.copy_percentage || 100}%</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground">Max Risk:</span>
+                            <span className="font-semibold">{followingStatus[trader.id]?.max_risk_per_trade || 2}%</span>
+                          </div>
+                        </div>
+                        
+                        {/* Quick Settings Button */}
+                        <Button 
+                          size="sm" 
+                          variant="outline" 
+                          className="w-full h-8 text-xs"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            // TODO: Open copy settings modal
+                            toast({
+                              title: "Copy Settings",
+                              description: "Copy settings panel coming soon!",
+                            })
+                          }}
+                        >
+                          <Settings className="w-3 h-3 mr-1" />
+                          Adjust Copy Settings
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 </CardContent>
 

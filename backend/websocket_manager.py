@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[int, Set[WebSocket]] = {}  # user_id -> set of websockets
+        self.client_connections: Dict[int, WebSocket] = {}       # user_id -> client websocket
         self.connection_metadata: Dict[WebSocket, Dict] = {}     # websocket -> metadata
     
     async def connect(self, websocket: WebSocket, user_id: int, connection_type: str = "general"):
@@ -30,6 +31,37 @@ class ConnectionManager:
         }
         
         logger.info(f"User {user_id} connected via WebSocket ({connection_type})")
+    
+    async def connect_client(self, websocket: WebSocket, user_id: int):
+        """Connect a Windows Client WebSocket for trade commands"""
+        await websocket.accept()
+        
+        # Store client connection (only one per user)
+        if user_id in self.client_connections:
+            # Disconnect existing client connection
+            old_websocket = self.client_connections[user_id]
+            if old_websocket in self.connection_metadata:
+                del self.connection_metadata[old_websocket]
+        
+        self.client_connections[user_id] = websocket
+        self.connection_metadata[websocket] = {
+            "user_id": user_id,
+            "connection_type": "client",
+            "connected_at": datetime.now(),
+            "last_ping": datetime.now()
+        }
+        
+        logger.info(f"Windows Client for user {user_id} connected and ready for trade commands")
+    
+    def disconnect_client(self, websocket: WebSocket, user_id: int):
+        """Disconnect a Windows Client WebSocket"""
+        if user_id in self.client_connections and self.client_connections[user_id] == websocket:
+            del self.client_connections[user_id]
+        
+        if websocket in self.connection_metadata:
+            del self.connection_metadata[websocket]
+        
+        logger.info(f"Windows Client for user {user_id} disconnected")
     
     def disconnect(self, websocket: WebSocket):
         """Disconnect a WebSocket"""
@@ -156,6 +188,32 @@ class ConnectionManager:
             },
             "timestamp": datetime.now().isoformat()
         }, follower_id)
+    
+    async def send_trade_command(self, user_id: int, command_type: str, command_data: Dict):
+        """Send trade command to Windows Client"""
+        if user_id not in self.client_connections:
+            logger.warning(f"Cannot send trade command to user {user_id}: No client connection")
+            return False
+        
+        websocket = self.client_connections[user_id]
+        message = {
+            "type": command_type,
+            "data": command_data,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        try:
+            await websocket.send_text(json.dumps(message))
+            logger.info(f"Trade command '{command_type}' sent to user {user_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to send trade command to user {user_id}: {e}")
+            self.disconnect_client(websocket, user_id)
+            return False
+    
+    def is_client_connected(self, user_id: int) -> bool:
+        """Check if user has Windows Client connected"""
+        return user_id in self.client_connections
     
     def get_connection_count(self) -> int:
         """Get total number of active connections"""

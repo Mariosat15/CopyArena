@@ -3,17 +3,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-from sqlalchemy import create_engine, desc
+from sqlalchemy import create_engine, desc, text
 from datetime import datetime, timedelta
 import asyncio
 import logging
 import json
 import uuid
 import os
+import hashlib
 from pathlib import Path
 
 # Import models and database
-from models import Base, User, Trade, MT5Connection, SessionLocal, engine, hash_password, verify_password, Follow
+from models import Base, User, Trade, MT5Connection, SessionLocal, engine, hash_password, verify_password, Follow, CopyTrade
 from websocket_manager import ConnectionManager
 
 # Import for password validation
@@ -47,6 +48,24 @@ app.add_middleware(
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
+
+# Lightweight migration to ensure new columns exist in existing SQLite DBs
+def ensure_copy_trades_schema():
+    try:
+        with engine.connect() as conn:
+            # Check existing columns on copy_trades
+            cols = conn.execute(text("PRAGMA table_info(copy_trades);")).fetchall()
+            col_names = {row[1] for row in cols}  # row[1] is the column name in PRAGMA table_info
+
+            # Add copy_hash if missing
+            if 'copy_hash' not in col_names:
+                conn.execute(text("ALTER TABLE copy_trades ADD COLUMN copy_hash VARCHAR(64)"))
+                logger.info("✅ Migrated: Added column copy_hash to copy_trades")
+    except Exception as e:
+        logger.error(f"❌ Migration check failed: {e}")
+
+# Run schema check/migration at startup
+ensure_copy_trades_schema()
 
 # WebSocket manager
 manager = ConnectionManager()
@@ -461,24 +480,43 @@ async def handle_account_update(user: User, data: dict, db: Session):
                    f"Equity={data.get('equity')}, Margin={data.get('margin')}, "
                    f"Free Margin={data.get('free_margin')}, Margin Level={margin_level}%")
 
-async def handle_positions_update(user: User, positions: list, db: Session):
-    """Handle positions update from Windows Client - LIVE DATA PROCESSING"""
-    logger.info(f"🔄 Processing {len(positions)} positions for {user.username}")
+async def handle_positions_update(user: User, positions_data: any, db: Session):
+    """Handle positions update from Windows Client with market status awareness"""
+    
+    # Handle both old format (list) and new format (dict with market status)
+    if isinstance(positions_data, list):
+        # Legacy format: just positions list
+        positions = positions_data
+        market_open = True  # Assume market open for legacy data
+        logger.info(f"🔄 Processing {len(positions)} positions for {user.username} (legacy format)")
+    elif isinstance(positions_data, dict):
+        # New format: dict with positions and market status
+        positions = positions_data.get("positions", [])
+        market_open = positions_data.get("market_open", True)
+        
+        market_status = "🟢 OPEN" if market_open else "🔴 CLOSED"
+        logger.info(f"🔄 Processing {len(positions)} positions for {user.username} | Market: {market_status}")
+    else:
+        logger.error(f"❌ Invalid positions data format: {type(positions_data)}")
+        return
     
     if not positions:
-        logger.info("📭 No positions received - MARKET MAY BE CLOSED (not closing trades)")
-        # ⚠️ IMPORTANT: Don't automatically close trades on empty positions!
-        # Empty positions could mean:
-        # 1. Market is closed
-        # 2. EA temporarily disconnected
-        # 3. Actual trades were closed
-        # We should only close trades when we get explicit close signals
+        if market_open:
+            logger.info("📭 No positions received - MARKET OPEN: Positions may have been closed by master trader")
+            # Market is open but no positions = real close by master trader
+            # Process position closures for copy trading
+            if user.is_master_trader:
+                await process_master_positions_cleared(user, db)
+        else:
+            logger.info("📭 No positions received - MARKET CLOSED: Positions hidden but still exist")
+            # Market is closed, positions are just hidden, don't process closures
         
-        # Send WebSocket update that no live positions are available
+        # Send WebSocket update
         await manager.send_user_message({
             "type": "positions_update",
             "data": [],
-            "message": "No live positions (market may be closed)"
+            "market_open": market_open,
+            "message": "Market open but no positions" if market_open else "Market closed - positions hidden"
         }, user.id)
         return
     
@@ -494,7 +532,19 @@ async def handle_positions_update(user: User, positions: list, db: Session):
                 
             # Extract position data
             symbol = pos.get("symbol", "")
-            trade_type = "buy" if pos.get("type") == 0 else "sell"
+            
+            # 🔍 DEBUG: Check the raw type value from client
+            raw_type = pos.get("type")
+            
+            # Client already sends "buy"/"sell" strings, not numeric types
+            if isinstance(raw_type, str):
+                trade_type = raw_type  # Use the string directly
+            else:
+                # Fallback for numeric types (legacy)
+                trade_type = "buy" if raw_type == 0 else "sell"
+                
+            logger.info(f"🔍 DEBUG: Position type: {raw_type} (type: {type(raw_type)}) -> mapped to: '{trade_type}' for {symbol}")
+            
             volume = float(pos.get("volume", 0))
             open_price = float(pos.get("open_price", 0))
             current_price = float(pos.get("current_price", 0))
@@ -519,6 +569,21 @@ async def handle_positions_update(user: User, positions: list, db: Session):
                 existing_trade.close_price = None  # Clear close price for open trades
                 updated_count += 1
                 logger.info(f"✅ Updated {ticket}: {symbol} {profit:.2f}")
+
+                # Link any pending copy trade record for this follower by ticket
+                try:
+                    ct = db.query(CopyTrade).join(Follow).filter(
+                        Follow.follower_id == user.id,
+                        CopyTrade.follower_ticket == ticket
+                    ).first()
+                    if ct and not ct.follower_trade_id:
+                        ct.follower_trade_id = existing_trade.id
+                        if ct.status == "pending":
+                            ct.status = "executed"
+                            ct.executed_at = datetime.utcnow()
+                        db.commit()
+                except Exception:
+                    db.rollback()
             else:
                 # Create NEW trade - ALWAYS OPEN
                 new_trade = Trade(
@@ -536,45 +601,87 @@ async def handle_positions_update(user: User, positions: list, db: Session):
                     comment=""
                 )
                 db.add(new_trade)
+                db.flush()  # Get the trade ID
+                db.commit()  # Ensure trade is committed before copy trading
                 new_count += 1
                 logger.info(f"🆕 NEW trade {ticket}: {symbol} {profit:.2f}")
+
+                # Link any pending copy trade record for this follower by ticket
+                try:
+                    ct = db.query(CopyTrade).join(Follow).filter(
+                        Follow.follower_id == user.id,
+                        CopyTrade.follower_ticket == ticket
+                    ).first()
+                    if ct and not ct.follower_trade_id:
+                        ct.follower_trade_id = new_trade.id
+                        if ct.status == "pending":
+                            ct.status = "executed"
+                            ct.executed_at = datetime.utcnow()
+                        db.commit()
+                except Exception:
+                    db.rollback()
+                
+                # 🎯 COPY TRADING: Process new master trade
+                if user.is_master_trader:
+                    trade_data = {
+                        "ticket": ticket,
+                        "symbol": symbol,
+                        "type": trade_type,
+                        "volume": volume,
+                        "open_price": open_price,
+                        "sl": pos.get("sl"),
+                        "tp": pos.get("tp")
+                    }
+                    await process_new_master_trade(user, trade_data, db)
                 
         except Exception as e:
             logger.error(f"❌ Error processing position {pos}: {e}")
             continue
     
-    # 🔥 CRITICAL: Now check for trades that were actually closed
-    # Only close trades that exist in DB but are NOT in the current Windows Client positions
-    if positions:  # Only do this check if we have positions data
-        current_client_tickets = {str(pos.get("ticket", "")) for pos in positions if pos.get("ticket")}
-        db_open_trades = db.query(Trade).filter(
-            Trade.user_id == user.id,
-            Trade.status == "open"
-        ).all()
-        
-        closed_missing_count = 0
-        for db_trade in db_open_trades:
-            if db_trade.ticket not in current_client_tickets:
-                # This trade is open in DB but missing from Windows Client positions = ACTUALLY CLOSED!
-                db_trade.status = "closed"
-                db_trade.close_time = datetime.utcnow()
-                db_trade.close_price = db_trade.current_price or db_trade.open_price
-                if db_trade.unrealized_profit:
-                    db_trade.realized_profit = db_trade.unrealized_profit
-                    db_trade.unrealized_profit = 0
-                closed_missing_count += 1
-                logger.info(f"🔒 CLOSED missing trade {db_trade.ticket} (not in Windows Client positions)")
-        
-        if closed_missing_count > 0:
-            logger.info(f"🎯 CLOSED {closed_missing_count} trades that were actually closed")
+    # 🎯 COPY TRADING: Bulletproof closure detection for connected masters only
+    if user.is_master_trader and market_open:
+        # ONLY process closure detection if master is currently connected
+        # This ensures we only act on real-time data from active connections
+        if manager.is_client_connected(user.id):
+            current_client_tickets = {str(pos.get("ticket", "")) for pos in positions if pos.get("ticket")}
+            
+            # Find master trades that are open in DB but missing from current positions
+            missing_trades = db.query(Trade).filter(
+                Trade.user_id == user.id,
+                Trade.status == "open",
+                ~Trade.ticket.in_(current_client_tickets)  # Not in current positions
+            ).all()
+            
+            if missing_trades:
+                closed_tickets = []
+                for trade in missing_trades:
+                    # Mark trade as closed
+                    trade.status = "closed"
+                    trade.close_time = datetime.utcnow()
+                    trade.close_price = trade.current_price or trade.open_price
+                    if trade.unrealized_profit:
+                        trade.realized_profit = trade.unrealized_profit
+                        trade.unrealized_profit = 0
+                    closed_tickets.append(trade.ticket)
+                    logger.info(f"📊 Connected Master {user.username} closed trade {trade.ticket}")
+                
+                db.commit()
+                
+                # Trigger copy trading for followers
+                await close_specific_follower_trades(user, closed_tickets, db)
+                logger.info(f"🔗 Triggered copy close for tickets: {closed_tickets}")
+        else:
+            logger.info(f"📴 Master {user.username} not connected - skipping closure detection (positions will sync when reconnected)")
     
     db.commit()
     logger.info(f"🚀 Position update complete: {new_count} new, {updated_count} updated")
     
-    # Send immediate WebSocket update for instant UI refresh
+    # Send immediate WebSocket update with actual positions data for instant UI refresh
     await manager.send_user_message({
-        "type": "positions_updated",
-        "data": {"new": new_count, "updated": updated_count},
+        "type": "positions_update",
+        "data": positions,
+        "market_open": market_open if isinstance(positions_data, dict) else True,
+        "stats": {"new": new_count, "updated": updated_count},
         "message": "Live trades updated"
     }, user.id)
 
@@ -1588,6 +1695,834 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int):
             # Handle any client messages if needed
     except WebSocketDisconnect:
         manager.disconnect(websocket)  # Pass websocket object, not user_id
+
+@app.websocket("/ws/client/{user_id}")
+async def client_websocket_endpoint(websocket: WebSocket, user_id: int):
+    """WebSocket endpoint for Windows Client trade commands"""
+    try:
+        # Get user from database to verify
+        db = SessionLocal()
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            logger.error(f"❌ Invalid user_id {user_id} for client WebSocket")
+            await websocket.close(code=1008, reason="Invalid user")
+            return
+        
+        logger.info(f"🔌 Windows Client WebSocket connected: {user.username} (ID: {user_id})")
+        await manager.connect_client(websocket, user_id)
+
+        # 🔄 Backfill copy trades for follower on connect (copy any existing master open positions)
+        try:
+            await backfill_copy_trades_for_follower(user_id, db)
+        except Exception as bf_err:
+            logger.error(f"❌ Backfill error for follower {user_id}: {bf_err}")
+        
+        while True:
+            # Keep connection alive and handle client responses
+            data = await websocket.receive_text()
+            message = json.loads(data)
+            
+            logger.info(f"📨 Client WebSocket message from {user.username}: {message.get('type', 'unknown')}")
+            
+            # Handle execution results from client
+            if message.get("type") in ["trade_executed", "trade_closed"]:
+                await handle_client_execution_result(user_id, message)
+            else:
+                logger.warning(f"⚠️ Unknown client message type: {message.get('type')}")
+
+    except WebSocketDisconnect:
+        logger.info(f"🔌 Windows Client WebSocket disconnected: User {user_id}")
+        manager.disconnect_client(websocket, user_id)
+    except Exception as e:
+        logger.error(f"❌ Client WebSocket error for user {user_id}: {e}")
+        manager.disconnect_client(websocket, user_id)
+    finally:
+        if 'db' in locals():
+            db.close()
+
+# === COPY TRADING LOGIC ===
+
+def generate_copy_hash(master_name: str, master_ticket: str, open_time: str) -> str:
+    """Generate unique hash for copy trade tracking"""
+    hash_input = f"{master_name}_{master_ticket}_{open_time}"
+    return hashlib.sha256(hash_input.encode()).hexdigest()
+
+async def backfill_copy_trades_for_follower(follower_user_id: int, db: Session):
+    """When a follower client connects, copy any currently open master positions immediately."""
+    try:
+        # Find all masters this follower is actively following
+        follows = db.query(Follow).filter(
+            Follow.follower_id == follower_user_id,
+            Follow.is_active == True
+        ).all()
+
+        if not follows:
+            return
+
+        for follow in follows:
+            master_id = follow.following_id
+            master = db.query(User).filter(User.id == master_id).first()
+            if not master or not master.is_master_trader:
+                continue
+
+            # Get master's currently open trades
+            open_master_trades = db.query(Trade).filter(
+                Trade.user_id == master_id,
+                Trade.status == "open"
+            ).all()
+
+            if not open_master_trades:
+                continue
+
+            logger.info(f"🔄 Backfill: copying {len(open_master_trades)} open positions from {master.username} to follower {follower_user_id}")
+
+            # For each open master trade, if we don't already have a CopyTrade pending/executed for this follower+ticket, create one
+            for mt in open_master_trades:
+                # Avoid duplicates: check if we already have a copy trade for this master ticket for this follower in pending/executed
+                existing = db.query(CopyTrade).filter(
+                    CopyTrade.master_trade_id == mt.id,
+                    CopyTrade.follow_id == follow.id,
+                    CopyTrade.status.in_(["pending", "executed"]) 
+                ).first()
+                if existing:
+                    continue
+
+                master_trade_data = {
+                    "ticket": mt.ticket,
+                    "symbol": mt.symbol,
+                    "type": mt.trade_type,
+                    "volume": float(mt.volume or 0.01),
+                    "open_price": float(mt.open_price or 0),
+                    "sl": None,
+                    "tp": None,
+                }
+
+                # Reuse existing create_copy_trade to send command (will generate hash and record)
+                await create_copy_trade(follow, master_trade_data, db)
+
+    except Exception as e:
+        logger.error(f"Error in backfill_copy_trades_for_follower: {e}")
+
+async def handle_client_execution_result(user_id: int, message: dict):
+    """Handle execution results from Windows Client"""
+    try:
+        db = next(get_db())
+        message_type = message.get("type")
+        data = message.get("data", {})
+        
+        if message_type == "trade_executed":
+            await handle_copy_trade_execution_result(user_id, data, db)
+        elif message_type == "trade_closed":
+            await handle_copy_trade_close_result(user_id, data, db)
+            
+        db.close()
+        
+    except Exception as e:
+        logger.error(f"Error handling client execution result: {e}")
+
+async def handle_copy_trade_execution_result(user_id: int, data: dict, db: Session):
+    """Handle copy trade execution confirmation"""
+    try:
+        success = data.get("success", False)
+        ticket = data.get("ticket")
+        original_command = data.get("original_command", {})
+        master_ticket = original_command.get("master_ticket")
+        
+        logger.info(f"🔍 DEBUG Execution result: success={success}, ticket={ticket}, master_ticket={master_ticket}, user={user_id}")
+        logger.info(f"🔍 DEBUG Original command: {original_command}")
+        
+        # Try to get copy_hash from the execution result first
+        copy_hash = data.get("copy_hash")
+        
+        if success and ticket:
+            # Find the pending copy trade record by hash if available, otherwise fallback to master_ticket
+            if copy_hash:
+                copy_trade = db.query(CopyTrade).filter(
+                    CopyTrade.copy_hash == copy_hash,
+                    CopyTrade.status == "pending"
+                ).join(Follow).filter(Follow.follower_id == user_id).first()
+            else:
+                # Fallback to old method if no hash available
+                copy_trade = db.query(CopyTrade).filter(
+                    CopyTrade.master_ticket == master_ticket,
+                    CopyTrade.status == "pending"
+                ).join(Follow).filter(Follow.follower_id == user_id).first()
+            
+            if copy_trade:
+                # Update copy trade record
+                copy_trade.follower_ticket = str(ticket)
+                copy_trade.status = "executed"
+                copy_trade.executed_at = datetime.utcnow()
+                
+                # Try to link follower_trade_id to the follower's Trade row
+                try:
+                    follower_trade = db.query(Trade).filter(
+                        Trade.user_id == user_id,
+                        Trade.ticket == str(ticket)
+                    ).first()
+                    if follower_trade:
+                        copy_trade.follower_trade_id = follower_trade.id
+                except Exception:
+                    pass
+                db.commit()
+                
+                logger.info(f"✅ Copy trade executed: Master {master_ticket} → Follower {ticket} (Copy ID: {copy_trade.id})")
+                
+                # Send notification to web UI
+                await manager.send_user_message({
+                    "type": "copy_trade_executed",
+                    "data": {
+                        "master_ticket": master_ticket,
+                        "follower_ticket": ticket,
+                        "symbol": copy_trade.symbol,
+                        "master_trader": original_command.get("master_trader")
+                    }
+                }, user_id)
+            else:
+                # Show available copy trades for debugging
+                pending_trades = db.query(CopyTrade).filter(
+                    CopyTrade.status == "pending"
+                ).join(Follow).filter(Follow.follower_id == user_id).all()
+                
+                logger.error(f"❌ Copy trade not found for execution: master_ticket={master_ticket}, user={user_id}")
+                logger.error(f"🔍 Available pending copy trades for user {user_id}: {[(ct.id, ct.master_ticket) for ct in pending_trades]}")
+        else:
+            # Handle failed execution
+            if master_ticket:
+                copy_trade = db.query(CopyTrade).filter(
+                    CopyTrade.master_ticket == master_ticket,
+                    CopyTrade.status == "pending"
+                ).join(Follow).filter(Follow.follower_id == user_id).first()
+                
+                if copy_trade:
+                    copy_trade.status = "failed"
+                    copy_trade.error_message = f"Execution failed: {data.get('error', 'Unknown error')}"
+                    copy_trade.retry_count += 1
+                    db.commit()
+                    
+                    logger.error(f"❌ Copy trade execution failed: {copy_trade.error_message}")
+                    
+    except Exception as e:
+        logger.error(f"Error handling copy trade execution result: {e}")
+
+async def handle_copy_trade_close_result(user_id: int, data: dict, db: Session):
+    """Handle copy trade close confirmation"""
+    try:
+        success = data.get("success", False)
+        ticket = data.get("ticket")
+        
+        # Try to get copy_hash from the close result first
+        copy_hash = data.get("copy_hash")
+        
+        if success and ticket:
+            # Find copy trade record by hash if available, otherwise fallback to ticket
+            if copy_hash:
+                copy_trade = db.query(CopyTrade).filter(
+                    CopyTrade.copy_hash == copy_hash,
+                    CopyTrade.status == "executed"
+                ).join(Follow).filter(Follow.follower_id == user_id).first()
+            else:
+                # Fallback to old method if no hash available
+                copy_trade = db.query(CopyTrade).filter(
+                    CopyTrade.follower_ticket == str(ticket),
+                    CopyTrade.status == "executed"
+                ).join(Follow).filter(Follow.follower_id == user_id).first()
+            
+            if copy_trade:
+                copy_trade.status = "closed"
+                copy_trade.closed_at = datetime.utcnow()
+                db.commit()
+                
+                logger.info(f"✅ Copy trade closed: Ticket {ticket}")
+                
+    except Exception as e:
+        logger.error(f"Error handling copy trade close result: {e}")
+
+async def process_new_master_trade(user: User, trade_data: dict, db: Session):
+    """Process a new trade from a master trader and copy to followers"""
+    try:
+        if not user.is_master_trader:
+            return  # Not a master trader, no copying needed
+        
+        # Get all active followers
+        followers = db.query(Follow).filter(
+            Follow.following_id == user.id,
+            Follow.is_active == True
+        ).all()
+        
+        if not followers:
+            logger.info(f"Master trader {user.username} has no followers")
+            return
+        
+        logger.info(f"🎯 Processing new master trade from {user.username} for {len(followers)} followers")
+        
+        for follow in followers:
+            await create_copy_trade(follow, trade_data, db)
+            
+    except Exception as e:
+        logger.error(f"Error processing master trade: {e}")
+
+async def create_copy_trade(follow: Follow, master_trade_data: dict, db: Session):
+    """Create and execute a copy trade for a follower"""
+    try:
+        follower_id = follow.follower_id
+        master_ticket = master_trade_data.get("ticket")
+        symbol = master_trade_data.get("symbol")
+        trade_type = master_trade_data.get("type")
+        original_volume = master_trade_data.get("volume", 0.01)
+        
+        # Find the master trade record by ticket and master trader ID
+        master_trade = db.query(Trade).filter(
+            Trade.ticket == str(master_ticket),
+            Trade.user_id == follow.following_id,
+            Trade.status == "open"
+        ).first()
+        
+        if not master_trade:
+            logger.error(f"❌ Master trade not found: ticket {master_ticket} for user {follow.following_id}")
+            return
+        
+        # Calculate copy volume based on follower settings
+        copied_volume = original_volume * follow.volume_multiplier if hasattr(follow, 'volume_multiplier') else original_volume
+        copy_ratio = copied_volume / original_volume if original_volume > 0 else 1.0
+        
+        # Check if client is connected
+        if not manager.is_client_connected(follower_id):
+            logger.warning(f"Cannot copy trade to user {follower_id}: Client not connected")
+            return
+        
+        # Get master trader info
+        master_trader = db.query(User).filter(User.id == follow.following_id).first()
+        master_trader_name = master_trader.username if master_trader else "Unknown"
+        
+        # Generate copy hash for unique tracking
+        open_time = master_trade.open_time.isoformat() if master_trade.open_time else datetime.utcnow().isoformat()
+        copy_hash = generate_copy_hash(master_trader_name, str(master_ticket), open_time)
+        
+        # Create copy trade record with proper master_trade_id and hash
+        copy_trade = CopyTrade(
+            master_trade_id=master_trade.id,  # Use the actual master trade ID
+            follower_trade_id=None,  # Will be updated after execution
+            follow_id=follow.id,
+            master_ticket=master_ticket,
+            copy_ratio=copy_ratio,
+            symbol=symbol,
+            trade_type=trade_type,
+            original_volume=original_volume,
+            copied_volume=copied_volume,
+            copy_hash=copy_hash,  # Add the unique hash
+            status="pending"
+        )
+        
+        db.add(copy_trade)
+        db.commit()
+        
+        # Get master trader info
+        master_trader = db.query(User).filter(User.id == follow.following_id).first()
+        master_trader_name = master_trader.username if master_trader else "Unknown"
+        
+        # 🔍 DEBUG: Log trade type processing
+        logger.info(f"🔍 DEBUG: Master trade_type from master_trade_data: '{master_trade_data.get('type')}' -> processed as: '{trade_type}'")
+        
+        # Send trade command to follower's client
+        command_data = {
+            "symbol": symbol,
+            "type": trade_type,
+            "volume": copied_volume,
+            "sl": master_trade_data.get("sl"),
+            "tp": master_trade_data.get("tp"),
+            "master_trader": master_trader_name,
+            "master_ticket": master_ticket,
+            "copy_trade_id": copy_trade.id,
+            "copy_hash": copy_hash  # Include the unique hash
+        }
+        
+        # 🔍 DEBUG: Log the command being sent
+        logger.info(f"🔍 DEBUG: Command data being sent: {command_data}")
+        
+        success = await manager.send_trade_command(follower_id, "execute_trade", command_data)
+        
+        if success:
+            logger.info(f"🎯 Copy trade command sent: {symbol} {trade_type} {copied_volume} lots to user {follower_id}")
+        else:
+            # Mark as failed if command couldn't be sent
+            copy_trade.status = "failed"
+            copy_trade.error_message = "Failed to send command to client"
+            db.commit()
+            
+    except Exception as e:
+        logger.error(f"Error creating copy trade: {e}")
+
+async def close_specific_follower_trades(master_user: User, closed_master_tickets: list, db: Session):
+    """Close only specific follower trades that match the master's closed trades"""
+    try:
+        if not master_user.is_master_trader:
+            return
+            
+        logger.info(f"🎯 Closing specific follower trades for master tickets: {closed_master_tickets}")
+        
+        # Get all followers of this master
+        followers = db.query(Follow).filter(Follow.following_id == master_user.id).all()
+        logger.info(f"🔍 DEBUG: Found {len(followers)} followers for master {master_user.username}")
+        
+        for follow in followers:
+            follower_user = db.query(User).filter(User.id == follow.follower_id).first()
+            if not follower_user:
+                continue
+                
+            # Find copy trades for the SPECIFIC tickets that master closed
+            follower_copy_trades = (
+                db.query(CopyTrade)
+                .filter(
+                    CopyTrade.follow_id == follow.id,
+                    CopyTrade.status == "executed",
+                    CopyTrade.master_ticket.in_(closed_master_tickets)  # Only specific tickets
+                    # Removed Trade.status == "open" filter - trade might already be marked closed
+                )
+                .all()
+            )
+            
+            logger.info(f"🔍 DEBUG: For follower {follower_user.username}, found {len(follower_copy_trades)} copy trades to close for tickets {closed_master_tickets}")
+            
+            if follower_copy_trades and manager.is_client_connected(follower_user.id):
+                logger.info(f"🎯 Closing {len(follower_copy_trades)} specific copy trades for follower {follower_user.username}")
+                
+                for copy_trade in follower_copy_trades:
+                    # Send close command for this specific trade
+                    follower_ticket = copy_trade.follower_ticket
+                    
+                    # Ensure copy_hash exists for reliable matching
+                    if not copy_trade.copy_hash:
+                        try:
+                            mt = copy_trade.master_trade
+                            open_time = mt.open_time.isoformat() if mt and mt.open_time else datetime.utcnow().isoformat()
+                            copy_trade.copy_hash = generate_copy_hash(master_user.username, str(copy_trade.master_ticket), open_time)
+                            db.commit()
+                        except Exception:
+                            pass
+                    
+                    close_command = {
+                        "ticket": int(follower_ticket) if follower_ticket else None,
+                        "symbol": copy_trade.symbol,
+                        "master_trader": master_user.username,
+                        "reason": "master_closed_specific",
+                        "copy_trade_id": copy_trade.id,
+                        "copy_hash": copy_trade.copy_hash,
+                        "master_ticket": copy_trade.master_ticket
+                    }
+                    
+                    await manager.send_trade_command(follower_user.id, "close_trade", close_command)
+                    logger.info(f"🎯 SPECIFIC: Close command sent to {follower_user.username} for master ticket {copy_trade.master_ticket} → follower ticket {follower_ticket}")
+            
+    except Exception as e:
+        logger.error(f"Error closing specific follower trades: {e}")
+
+async def sync_followers_with_master(master_user: User, db: Session):
+    """Sync all followers to match master's current live positions (like UI synchronization)"""
+    try:
+        if not master_user.is_master_trader:
+            return
+            
+        # Get master's current open trades (what backend sees live)
+        master_open_trades = db.query(Trade).filter(
+            Trade.user_id == master_user.id,
+            Trade.status == "open"
+        ).all()
+        
+        master_tickets = {trade.ticket for trade in master_open_trades}
+        logger.info(f"🔗 Master {master_user.username} has {len(master_tickets)} open trades: {list(master_tickets)}")
+        
+        # Get all followers of this master
+        followers = db.query(Follow).filter(Follow.following_id == master_user.id).all()
+        
+        for follow in followers:
+            follower_user = db.query(User).filter(User.id == follow.follower_id).first()
+            if not follower_user:
+                continue
+                
+            # Get follower's current open copy trades for this master
+            follower_copy_trades = (
+                db.query(CopyTrade)
+                .join(Trade, CopyTrade.follower_trade_id == Trade.id)
+                .filter(
+                    CopyTrade.follow_id == follow.id,
+                    CopyTrade.status == "executed",
+                    Trade.status == "open"
+                )
+                .all()
+            )
+            
+            follower_master_tickets = {ct.master_ticket for ct in follower_copy_trades}
+            logger.info(f"🔗 Follower {follower_user.username} has copy trades for: {list(follower_master_tickets)}")
+            
+            # Find copy trades that should be closed (master no longer has these)
+            trades_to_close = []
+            for copy_trade in follower_copy_trades:
+                if copy_trade.master_ticket not in master_tickets:
+                    trades_to_close.append(copy_trade)
+            
+            if trades_to_close and manager.is_client_connected(follower_user.id):
+                logger.info(f"🔗 Closing {len(trades_to_close)} copy trades for follower {follower_user.username}")
+                
+                for copy_trade in trades_to_close:
+                    # Send close command to follower
+                    follower_ticket = copy_trade.follower_ticket
+                    
+                    # Ensure copy_hash exists for reliable matching
+                    if not copy_trade.copy_hash:
+                        try:
+                            mt = copy_trade.master_trade
+                            open_time = mt.open_time.isoformat() if mt and mt.open_time else datetime.utcnow().isoformat()
+                            copy_trade.copy_hash = generate_copy_hash(master_user.username, str(copy_trade.master_ticket), open_time)
+                            db.commit()
+                        except Exception:
+                            pass
+                    
+                    close_command = {
+                        "ticket": int(follower_ticket) if follower_ticket else None,
+                        "symbol": copy_trade.symbol,
+                        "master_trader": master_user.username,
+                        "reason": "master_sync",
+                        "copy_trade_id": copy_trade.id,
+                        "copy_hash": copy_trade.copy_hash,
+                        "master_ticket": copy_trade.master_ticket
+                    }
+                    
+                    await manager.send_trade_command(follower_user.id, "close_trade", close_command)
+                    logger.info(f"🔗 SYNC: Close command sent to {follower_user.username} for master ticket {copy_trade.master_ticket}")
+            
+    except Exception as e:
+        logger.error(f"Error syncing followers with master: {e}")
+
+async def process_master_positions_cleared(user: User, db: Session):
+    """Process when a master trader has no positions while market is open (they closed all trades)"""
+    try:
+        if not user.is_master_trader:
+            return
+        
+        # Candidate copy trades for this master (only those with open follower trades)
+        open_copy_trades = (
+            db.query(CopyTrade)
+            .join(Follow, CopyTrade.follow_id == Follow.id)
+            .outerjoin(Trade, CopyTrade.follower_trade_id == Trade.id)
+            .filter(
+                Follow.following_id == user.id,
+                CopyTrade.status == "executed",
+                Trade.status == "open"  # Only copy trades where follower's trade is still open
+            )
+            .all()
+        )
+        
+        if not open_copy_trades:
+            logger.info(f"🔒 Master {user.username} cleared positions but no copy trades to close")
+            return
+            
+        logger.info(f"🔒 Master {user.username} cleared all positions - closing {len(open_copy_trades)} copy trades")
+        
+        for copy_trade in open_copy_trades:
+            # Get follower info
+            follow = copy_trade.follow_relationship
+            follower_id = follow.follower_id
+            
+            # Check if follower's client is connected
+            if manager.is_client_connected(follower_id):
+                # Check current open tickets, but don't skip sending; fallback will use hash on client
+                follower_open_tickets = {
+                    str(t[0]) for t in db.query(Trade.ticket).filter(Trade.user_id == follower_id, Trade.status == "open").all()
+                }
+                follower_ticket = str(copy_trade.follower_ticket) if copy_trade.follower_ticket else None
+                # Ensure we have a hash for reliable matching
+                if not copy_trade.copy_hash:
+                    try:
+                        mt = copy_trade.master_trade
+                        open_time = mt.open_time.isoformat() if mt and mt.open_time else datetime.utcnow().isoformat()
+                        copy_trade.copy_hash = generate_copy_hash(user.username, str(copy_trade.master_ticket), open_time)
+                        db.commit()
+                    except Exception:
+                        pass
+                
+                # Debug logging for ticket matching
+                logger.info(f"🔍 DEBUG: Follower {follower_id} - follower_ticket: '{follower_ticket}', open_tickets: {follower_open_tickets}")
+                
+                # Try to convert follower_ticket to int if valid and in open tickets
+                ticket_to_send = None
+                if follower_ticket and follower_ticket in follower_open_tickets:
+                    try:
+                        ticket_to_send = int(follower_ticket)
+                    except (ValueError, TypeError):
+                        logger.warning(f"🔍 Cannot convert follower_ticket '{follower_ticket}' to int, using None")
+                        ticket_to_send = None
+                
+                # Send close command to follower's client
+                close_command = {
+                    "ticket": ticket_to_send,
+                    "symbol": copy_trade.symbol,
+                    "master_trader": user.username,
+                    "reason": "master_cleared_all",
+                    "copy_trade_id": copy_trade.id,
+                    "copy_hash": copy_trade.copy_hash  # Include the hash for matching
+                }
+                
+                success = await manager.send_trade_command(follower_id, "close_trade", close_command)
+                
+                if success:
+                    logger.info(f"🔒 Close command sent: Ticket {copy_trade.follower_ticket} to user {follower_id}")
+                else:
+                    logger.warning(f"❌ Failed to send close command to user {follower_id}")
+            else:
+                logger.warning(f"⚠️ Cannot close copy trade for user {follower_id}: Client not connected")
+                
+    except Exception as e:
+        logger.error(f"Error processing master positions cleared: {e}")
+
+async def process_master_trade_close(user: User, closed_trade_data: dict, db: Session):
+    """Process when a master trader closes a position"""
+    try:
+        if not user.is_master_trader:
+            return
+        
+        master_ticket = closed_trade_data.get("ticket")
+        
+        # Candidate copy trades for this master ticket (only those with open follower trades)
+        copy_trades = (
+            db.query(CopyTrade)
+            .outerjoin(Trade, CopyTrade.follower_trade_id == Trade.id)
+            .filter(
+                CopyTrade.master_ticket == master_ticket,
+                CopyTrade.status == "executed",
+                Trade.status == "open"  # Only copy trades where follower's trade is still open
+            )
+            .all()
+        )
+        
+        logger.info(f"🔒 Processing master trade close: {master_ticket} ({len(copy_trades)} copies to close)")
+        
+        for copy_trade in copy_trades:
+            follow = copy_trade.follow_relationship
+            follower_id = follow.follower_id
+            
+            follower_open_tickets = {
+                str(t[0]) for t in db.query(Trade.ticket).filter(Trade.user_id == follower_id, Trade.status == "open").all()
+            }
+            follower_ticket = str(copy_trade.follower_ticket) if copy_trade.follower_ticket else None
+            if manager.is_client_connected(follower_id):
+                # Send close command
+                # Ensure copy_hash exists
+                if not copy_trade.copy_hash:
+                    try:
+                        mt = copy_trade.master_trade
+                        open_time = mt.open_time.isoformat() if mt and mt.open_time else datetime.utcnow().isoformat()
+                        copy_trade.copy_hash = generate_copy_hash(user.username, str(copy_trade.master_ticket), open_time)
+                        db.commit()
+                    except Exception:
+                        pass
+                
+                # Debug logging for ticket matching
+                logger.info(f"🔍 DEBUG: Follower {follower_id} - follower_ticket: '{follower_ticket}', open_tickets: {follower_open_tickets}")
+                
+                # Try to convert follower_ticket to int if valid and in open tickets
+                ticket_to_send = None
+                if follower_ticket and follower_ticket in follower_open_tickets:
+                    try:
+                        ticket_to_send = int(follower_ticket)
+                    except (ValueError, TypeError):
+                        logger.warning(f"🔍 Cannot convert follower_ticket '{follower_ticket}' to int, using None")
+                        ticket_to_send = None
+                
+                command_data = {
+                    "ticket": ticket_to_send,
+                    "symbol": copy_trade.symbol,
+                    "master_trader": user.username,
+                    "reason": "master_closed",
+                    "copy_trade_id": copy_trade.id,
+                    "copy_hash": copy_trade.copy_hash,
+                    "master_ticket": master_ticket
+                }
+                
+                await manager.send_trade_command(follower_id, "close_trade", command_data)
+                logger.info(f"🔒 Close command sent for follower {follower_id} | ticket={command_data['ticket']} | symbol={command_data['symbol']}")
+            
+    except Exception as e:
+        logger.error(f"Error processing master trade close: {e}")
+
+# === COPY TRADING API ENDPOINTS ===
+
+@app.post("/api/follow/{master_id}")
+async def follow_trader(master_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Follow a master trader"""
+    try:
+        # Check if master trader exists and is a master trader
+        master_trader = db.query(User).filter(User.id == master_id, User.is_master_trader == True).first()
+        if not master_trader:
+            raise HTTPException(status_code=404, detail="Master trader not found")
+        
+        # Check if already following
+        existing_follow = db.query(Follow).filter(
+            Follow.follower_id == user.id,
+            Follow.following_id == master_id
+        ).first()
+        
+        if existing_follow:
+            # Reactivate if exists but inactive
+            existing_follow.is_active = True
+            db.commit()
+            return {"message": f"Successfully following {master_trader.username}", "follow_id": existing_follow.id}
+        
+        # Create new follow relationship
+        follow = Follow(
+            follower_id=user.id,
+            following_id=master_id,
+            is_active=True
+        )
+        
+        db.add(follow)
+        db.commit()
+        
+        logger.info(f"User {user.username} started following {master_trader.username}")
+        
+        return {"message": f"Successfully following {master_trader.username}", "follow_id": follow.id}
+        
+    except Exception as e:
+        logger.error(f"Error following trader: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/unfollow/{master_id}")
+async def unfollow_trader(master_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Unfollow a master trader"""
+    try:
+        follow = db.query(Follow).filter(
+            Follow.follower_id == user.id,
+            Follow.following_id == master_id
+        ).first()
+        
+        if not follow:
+            raise HTTPException(status_code=404, detail="Not following this trader")
+        
+        # Deactivate follow relationship
+        follow.is_active = False
+        db.commit()
+        
+        # TODO: Close all active copy trades for this relationship
+        
+        logger.info(f"User {user.username} unfollowed trader ID {master_id}")
+        
+        return {"message": "Successfully unfollowed trader"}
+        
+    except Exception as e:
+        logger.error(f"Error unfollowing trader: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/copy-trading/following")
+async def get_following(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Get list of traders the user is following"""
+    try:
+        follows = db.query(Follow).filter(
+            Follow.follower_id == user.id,
+            Follow.is_active == True
+        ).join(User, Follow.following_id == User.id).all()
+        
+        following_list = []
+        for follow in follows:
+            master_trader = follow.following
+            
+            # Get copy trade statistics
+            total_copies = db.query(CopyTrade).filter(CopyTrade.follow_id == follow.id).count()
+            successful_copies = db.query(CopyTrade).filter(
+                CopyTrade.follow_id == follow.id,
+                CopyTrade.status.in_(["executed", "closed"])
+            ).count()
+            
+            following_list.append({
+                "follow_id": follow.id,
+                "master_trader": {
+                    "id": master_trader.id,
+                    "username": master_trader.username,
+                    "is_online": master_trader.is_online
+                },
+                "follow_settings": {
+                    "copy_percentage": follow.copy_percentage,
+                    "max_risk_per_trade": follow.max_risk_per_trade
+                },
+                "statistics": {
+                    "total_copies": total_copies,
+                    "successful_copies": successful_copies,
+                    "success_rate": (successful_copies / total_copies * 100) if total_copies > 0 else 0,
+                    "total_profit": follow.total_profit_from_copying
+                },
+                "created_at": follow.created_at
+            })
+        
+        return {"following": following_list, "count": len(following_list)}
+        
+    except Exception as e:
+        logger.error(f"Error getting following list: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/copy-trading/copy-trades")
+async def get_copy_trades(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Get user's copy trade history"""
+    try:
+        copy_trades = db.query(CopyTrade).join(Follow).filter(
+            Follow.follower_id == user.id
+        ).order_by(CopyTrade.created_at.desc()).limit(100).all()
+        
+        copy_trade_list = []
+        for copy_trade in copy_trades:
+            master_trader = db.query(User).filter(User.id == copy_trade.follow_relationship.following_id).first()
+            
+            copy_trade_list.append({
+                "id": copy_trade.id,
+                "master_trader": master_trader.username if master_trader else "Unknown",
+                "master_ticket": copy_trade.master_ticket,
+                "follower_ticket": copy_trade.follower_ticket,
+                "symbol": copy_trade.symbol,
+                "trade_type": copy_trade.trade_type,
+                "original_volume": copy_trade.original_volume,
+                "copied_volume": copy_trade.copied_volume,
+                "copy_ratio": copy_trade.copy_ratio,
+                "status": copy_trade.status,
+                "created_at": copy_trade.created_at,
+                "executed_at": copy_trade.executed_at,
+                "closed_at": copy_trade.closed_at,
+                "error_message": copy_trade.error_message
+            })
+        
+        return {"copy_trades": copy_trade_list, "count": len(copy_trade_list)}
+        
+    except Exception as e:
+        logger.error(f"Error getting copy trades: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/copy-trading/settings/{follow_id}")
+async def update_copy_settings(
+    follow_id: int,
+    settings: dict,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update copy trading settings for a specific follow relationship"""
+    try:
+        follow = db.query(Follow).filter(
+            Follow.id == follow_id,
+            Follow.follower_id == user.id
+        ).first()
+        
+        if not follow:
+            raise HTTPException(status_code=404, detail="Follow relationship not found")
+        
+        # Update settings
+        if "copy_percentage" in settings:
+            follow.copy_percentage = max(0, min(100, settings["copy_percentage"]))
+        if "max_risk_per_trade" in settings:
+            follow.max_risk_per_trade = max(0.1, min(10, settings["max_risk_per_trade"]))
+        
+        db.commit()
+        
+        return {"message": "Copy trading settings updated successfully"}
+        
+    except Exception as e:
+        logger.error(f"Error updating copy settings: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # === STATIC FILES AND SPA ===
 

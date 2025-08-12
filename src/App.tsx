@@ -12,6 +12,7 @@ import { LeaderboardPage } from './pages/LeaderboardPage'
 import ProfilePage from './pages/ProfilePage'
 import { ReportsPage } from './pages/ReportsPage'
 import MT5ConnectionPage from './pages/MT5ConnectionPage'
+import CopyTradingPage from './pages/CopyTradingPage'
 import { Layout } from './components/Layout'
 import { Toaster } from './components/ui/toaster'
 import { useEffect, useState } from 'react'
@@ -64,6 +65,7 @@ function App() {
           <Route index element={<Navigate to="/dashboard" />} />
           <Route path="dashboard" element={<DashboardPage />} />
           <Route path="marketplace" element={<MarketplacePage />} />
+          <Route path="copy-trading" element={<CopyTradingPage />} />
           <Route path="leaderboard" element={<LeaderboardPage />} />
           <Route path="profile" element={<ProfilePage />} />
           <Route path="reports" element={<ReportsPage />} />

@@ -308,5 +308,44 @@ class Follow(Base):
     # Unique constraint - can't follow same person twice
     __table_args__ = (UniqueConstraint('follower_id', 'following_id', name='unique_follow'),)
 
+class CopyTrade(Base):
+    __tablename__ = "copy_trades"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    master_trade_id = Column(Integer, ForeignKey("trades.id", ondelete="CASCADE"), nullable=False)
+    follower_trade_id = Column(Integer, ForeignKey("trades.id", ondelete="CASCADE"), nullable=True)  # Nullable until execution
+    follow_id = Column(Integer, ForeignKey("follows.id", ondelete="CASCADE"), nullable=False)
+    
+    # Copy trade metadata
+    master_ticket = Column(String(50), nullable=False, index=True)
+    follower_ticket = Column(String(50), nullable=True, index=True)  # Set after execution
+    copy_ratio = Column(Float, default=1.0)  # Volume ratio used for this copy
+    status = Column(String(20), default="pending", nullable=False)  # pending, executed, failed, closed
+    
+    # Original trade details (for reference)
+    symbol = Column(String(20), nullable=False)
+    trade_type = Column(String(10), nullable=False)  # buy, sell
+    original_volume = Column(Float, nullable=False)
+    copied_volume = Column(Float, nullable=False)
+    
+    # Hash-based tracking: master_name + master_ticket + open_time
+    copy_hash = Column(String(64), nullable=True, index=True)  # SHA256 hash for unique tracking
+    
+    # Timing
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    executed_at = Column(DateTime)
+    closed_at = Column(DateTime)
+    
+    # Error tracking
+    error_message = Column(String(500))
+    retry_count = Column(Integer, default=0)
+    
+    # Relationships
+    master_trade = relationship("Trade", foreign_keys=[master_trade_id])
+    follower_trade = relationship("Trade", foreign_keys=[follower_trade_id])
+    follow_relationship = relationship("Follow", back_populates="copy_trades")
+
+# Add relationship to Follow model
+Follow.copy_trades = relationship("CopyTrade", back_populates="follow_relationship", cascade="all, delete-orphan")
 
 # Database is ready for use 
